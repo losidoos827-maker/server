@@ -1,11 +1,19 @@
 import json
 import random
+import asyncio
+
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
-from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.generic.websocket import (
+    AsyncWebsocketConsumer,
+)
 
-from.services.wager_service import finalize_wager_game
+from .services.wager_service import (
+    finalize_wager_game,
+    cancel_wager,
+)
+
 
 # ==========================================================
 # ACTIVE GAME MEMORY
@@ -13,15 +21,43 @@ from.services.wager_service import finalize_wager_game
 
 ACTIVE_GAMES = {}
 
+
+# ==========================================================
+# PENDING AUTO-SURRENDER TASKS
+#
+# Key:   "{game_id}:{player_token}"
+# Value: asyncio.Task
+# ==========================================================
+
+PENDING_SURRENDER_TASKS = {}
+
+
+# ==========================================================
+# AUTO-SURRENDER GRACE PERIOD
+#
+# Player disconnects → wait 30s → if not back, surrender.
+# ==========================================================
+
+AUTO_SURRENDER_GRACE_SECONDS = 30
+
+
 # ==========================================================
 # LUDO BOARD CONFIGURATION
 # ==========================================================
 
 START_OFFSETS = {
-    "BLUE": 0,
-    "RED": 13,
-    "GREEN": 26,
-    "YELLOW": 39,
+
+    "BLUE":
+        0,
+
+    "RED":
+        13,
+
+    "GREEN":
+        26,
+
+    "YELLOW":
+        39,
 }
 
 SAFE_GLOBAL_CELLS = {
@@ -35,18 +71,313 @@ SAFE_GLOBAL_CELLS = {
     47,
 }
 
+
 # ==========================================================
 # GLOBAL CELL
 # ==========================================================
 
-def get_global_cell_index(color, position):
+def get_global_cell_index(
+    color,
+    position,
+):
 
     if position == -1 or position >= 51:
+
         return None
 
     return (
         START_OFFSETS[color] + position
     ) % 52
+
+
+# ==========================================================
+# DB HELPERS (module-level, usable from tasks)
+# ==========================================================
+
+@database_sync_to_async
+def _ensure_game_room_exists(
+    game_id,
+    state,
+):
+
+    from .models import (
+        GameRoom,
+        UserProfileBalance,
+    )
+
+    game = (
+        GameRoom.objects
+        .filter(game_id=game_id)
+        .first()
+    )
+
+    if game:
+
+        return game
+
+    assignments = state.get(
+        "player_assignments",
+        {}
+    )
+
+    bet_amount = int(
+        state.get("bet_amount", 0)
+    )
+
+    game = GameRoom.objects.create(
+        game_id=game_id,
+        bet_amount=bet_amount,
+        game_status="ACTIVE",
+        total_pool_escrow=(
+            bet_amount
+            * len(assignments)
+        ),
+    )
+
+    for device_token in assignments.keys():
+
+        profile = (
+            UserProfileBalance.objects
+            .filter(device_token=device_token)
+            .first()
+        )
+
+        if profile:
+
+            game.players.add(profile)
+
+    return game
+
+
+# ==========================================================
+# AUTO-SURRENDER TASK
+#
+# Runs 30s after a player disconnects. If the player hasn't
+# reconnected by then, this function:
+#
+#   - If game is ACTIVE  → opponent wins + payout
+#   - If game is LOBBY   → cancel + refund
+# ==========================================================
+
+async def _auto_surrender_task(
+    game_id,
+    leaver_token,
+    channel_layer,
+):
+
+    try:
+
+        await asyncio.sleep(
+            AUTO_SURRENDER_GRACE_SECONDS
+        )
+
+    except asyncio.CancelledError:
+
+        print(
+            f"✋ Auto-surrender cancelled "
+            f"(player reconnected) | "
+            f"Game={game_id} | "
+            f"Player={leaver_token}"
+        )
+
+        return
+
+    state = ACTIVE_GAMES.get(game_id)
+
+    if not state:
+
+        return
+
+    status = state.get("game_status")
+
+    if status in (
+        "COMPLETED",
+        "CANCELLED",
+        "PAYOUT_ERROR",
+    ):
+
+        return
+
+    assignments = state.get(
+        "player_assignments",
+        {}
+    )
+
+    if leaver_token not in assignments:
+
+        return
+
+    # ==================================================
+    # LOBBY — cancel + refund
+    # ==================================================
+
+    if status == "LOBBY":
+
+        print(
+            f"⏱️ AUTO-CANCEL (lobby abandon) | "
+            f"Game={game_id} | "
+            f"Leaver={leaver_token}"
+        )
+
+        await database_sync_to_async(
+            cancel_wager
+        )(game_id)
+
+        state["game_status"] = "CANCELLED"
+
+        state["status_text"] = (
+            "Player abandoned room. "
+            "Game cancelled."
+        )
+
+        ACTIVE_GAMES.pop(game_id, None)
+
+        await channel_layer.group_send(
+            f"ludo_match_{game_id}",
+            {
+                "type":
+                    "send_state_payload",
+
+                "payload":
+                    state,
+            },
+        )
+
+        return
+
+    # ==================================================
+    # ACTIVE — opponent wins
+    # ==================================================
+
+    if status == "ACTIVE":
+
+        opponent_color = None
+        opponent_token = None
+
+        for token, color in assignments.items():
+
+            if token != leaver_token:
+
+                opponent_color = color
+                opponent_token = token
+
+                break
+
+        if not opponent_color:
+
+            return
+
+        leaver_color = assignments.get(
+            leaver_token
+        )
+
+        print(
+            f"⏱️ AUTO-SURRENDER (disconnect) | "
+            f"Game={game_id} | "
+            f"Leaver={leaver_token} "
+            f"({leaver_color}) | "
+            f"Winner={opponent_token} "
+            f"({opponent_color})"
+        )
+
+        state["status_text"] = (
+            f"{leaver_color} disconnected! "
+            f"{opponent_color} wins."
+        )
+
+        await _ensure_game_room_exists(
+            game_id,
+            state,
+        )
+
+        result = await database_sync_to_async(
+            finalize_wager_game
+        )(
+            game_id=game_id,
+            winning_device_token=(
+                opponent_token
+            ),
+        )
+
+        if (
+            not isinstance(result, dict)
+            or result.get("status") != "success"
+        ):
+
+            error_message = (
+                result.get(
+                    "message",
+                    "Unknown",
+                )
+                if isinstance(result, dict)
+                else "Invalid response"
+            )
+
+            state["game_status"] = "PAYOUT_ERROR"
+
+            state["status_text"] = (
+                f"Payout failed: {error_message}"
+            )
+
+            print(
+                f"❌ AUTO-PAYOUT FAILED | "
+                f"{error_message}"
+            )
+
+        else:
+
+            state["winner"] = opponent_color
+
+            state[
+                "winner_device_token"
+            ] = opponent_token
+
+            state["game_status"] = "COMPLETED"
+
+            state["winner_payout"] = int(
+                result.get(
+                    "winner_payout",
+                    0,
+                )
+            )
+
+            state["platform_fee"] = int(
+                result.get(
+                    "service_fee",
+                    0,
+                )
+            )
+
+            state["total_pool"] = int(
+                result.get(
+                    "total_pool",
+                    0,
+                )
+            )
+
+            state["status_text"] = (
+                f"{opponent_color} WON! "
+                f"{state['winner_payout']} "
+                f"coins awarded."
+            )
+
+            print(
+                f"🏆 AUTO-PAYOUT DONE | "
+                f"Winner={opponent_color} | "
+                f"Payout={state['winner_payout']}"
+            )
+
+        await channel_layer.group_send(
+            f"ludo_match_{game_id}",
+            {
+                "type":
+                    "send_state_payload",
+
+                "payload":
+                    state,
+            },
+        )
+
 
 # ==========================================================
 # LUDO WEBSOCKET CONSUMER
@@ -72,17 +403,17 @@ class LudoGameConsumer(
             f"ludo_match_{self.game_id}"
         )
 
-        # --------------------------------------------------
+        # ----------------------------------------------
         # Read player token
-        # --------------------------------------------------
+        # ----------------------------------------------
 
         query_string = (
             self.scope
-           .get(
+            .get(
                 "query_string",
                 b""
             )
-           .decode("utf-8")
+            .decode("utf-8")
         )
 
         parsed_params = parse_qs(
@@ -97,12 +428,85 @@ class LudoGameConsumer(
         self.player_token = (
             token_list[0]
             if token_list
-            else "Unknown_Device"
+            else None
         )
 
-        # --------------------------------------------------
-        # Join websocket group
-        # --------------------------------------------------
+        # ----------------------------------------------
+        # Authenticate
+        # ----------------------------------------------
+
+        if not self.player_token:
+
+            print(
+                f"❌ WS REJECTED | "
+                f"No token | "
+                f"Game={self.game_id}"
+            )
+
+            await self.close(code=4001)
+
+            return
+
+        if not await self._validate_player_token(
+            self.player_token
+        ):
+
+            print(
+                f"❌ WS REJECTED | "
+                f"Unknown token="
+                f"{self.player_token} | "
+                f"Game={self.game_id}"
+            )
+
+            await self.close(code=4001)
+
+            return
+
+        if not await self._player_in_game(
+            self.game_id,
+            self.player_token,
+        ):
+
+            print(
+                f"❌ WS REJECTED | "
+                f"Player not in game | "
+                f"Game={self.game_id} "
+                f"Player={self.player_token}"
+            )
+
+            await self.close(code=4003)
+
+            return
+
+        # ----------------------------------------------
+        # Cancel any pending auto-surrender for this
+        # player (they reconnected in time).
+        # ----------------------------------------------
+
+        task_key = (
+            f"{self.game_id}:"
+            f"{self.player_token}"
+        )
+
+        existing = PENDING_SURRENDER_TASKS.pop(
+            task_key,
+            None,
+        )
+
+        if existing:
+
+            existing.cancel()
+
+            print(
+                f"✋ Cancelled pending auto-surrender "
+                f"(reconnected) | "
+                f"Game={self.game_id} | "
+                f"Player={self.player_token}"
+            )
+
+        # ----------------------------------------------
+        # Join group
+        # ----------------------------------------------
 
         await self.channel_layer.group_add(
             self.room_group_name,
@@ -117,11 +521,45 @@ class LudoGameConsumer(
             f"Player={self.player_token}"
         )
 
-        # --------------------------------------------------
-        # Send current state
-        # --------------------------------------------------
-
         await self.broadcast_current_state()
+
+    # ======================================================
+    # DB HELPERS
+    # ======================================================
+
+    @database_sync_to_async
+    def _validate_player_token(
+        self,
+        token,
+    ):
+
+        from .models import (
+            UserProfileBalance
+        )
+
+        return (
+            UserProfileBalance.objects
+            .filter(device_token=token)
+            .exists()
+        )
+
+    @database_sync_to_async
+    def _player_in_game(
+        self,
+        game_id,
+        token,
+    ):
+
+        from .models import GameRoom
+
+        return (
+            GameRoom.objects
+            .filter(
+                game_id=game_id,
+                players__device_token=token,
+            )
+            .exists()
+        )
 
     # ======================================================
     # DISCONNECT
@@ -139,6 +577,73 @@ class LudoGameConsumer(
 
         print(
             f"▲ WS DISCONNECTED | "
+            f"Game={self.game_id} | "
+            f"Player={self.player_token}"
+        )
+
+        # ----------------------------------------------
+        # Schedule auto-surrender if game is ongoing
+        # ----------------------------------------------
+
+        if not self.player_token:
+
+            return
+
+        state = ACTIVE_GAMES.get(
+            self.game_id
+        )
+
+        if not state:
+
+            return
+
+        status = state.get("game_status")
+
+        if status not in (
+            "LOBBY",
+            "ACTIVE",
+        ):
+
+            return
+
+        assignments = state.get(
+            "player_assignments",
+            {}
+        )
+
+        if self.player_token not in assignments:
+
+            return
+
+        task_key = (
+            f"{self.game_id}:"
+            f"{self.player_token}"
+        )
+
+        existing = PENDING_SURRENDER_TASKS.pop(
+            task_key,
+            None,
+        )
+
+        if existing:
+
+            existing.cancel()
+
+        task = asyncio.create_task(
+            _auto_surrender_task(
+                self.game_id,
+                self.player_token,
+                self.channel_layer,
+            )
+        )
+
+        PENDING_SURRENDER_TASKS[
+            task_key
+        ] = task
+
+        print(
+            f"⏱️ Scheduled auto-surrender in "
+            f"{AUTO_SURRENDER_GRACE_SECONDS}s | "
             f"Game={self.game_id} | "
             f"Player={self.player_token}"
         )
@@ -162,6 +667,7 @@ class LudoGameConsumer(
         for color in assignments.values():
 
             if color not in colors:
+
                 colors.append(color)
 
         return colors
@@ -174,26 +680,11 @@ class LudoGameConsumer(
         self,
         state
     ):
-        """
-        Ensures turn order contains ONLY colors
-        that actually have players.
 
-        2-player example:
+        if state.get(
+            "game_status"
+        ) != "ACTIVE":
 
-            BLUE
-            GREEN
-
-        4-player example:
-
-            BLUE
-            RED
-            GREEN
-            YELLOW
-        """
-
-        # FIX: LOBBY me order ko mat kaato
-        # warna 2nd player ko color nahi milega
-        if state.get("game_status")!= "ACTIVE":
             return
 
         active_colors = (
@@ -203,6 +694,7 @@ class LudoGameConsumer(
         )
 
         if not active_colors:
+
             return
 
         existing_order = state.get(
@@ -212,7 +704,6 @@ class LudoGameConsumer(
 
         new_order = []
 
-        # Keep existing order where possible
         for color in existing_order:
 
             if (
@@ -222,31 +713,23 @@ class LudoGameConsumer(
 
                 new_order.append(color)
 
-        # Add active colors missing from order
         for color in active_colors:
 
             if color not in new_order:
+
                 new_order.append(color)
 
         state[
             "player_turn_order"
         ] = new_order
 
-        # --------------------------------------------------
-        # Keep turn index valid
-        # --------------------------------------------------
-
         if not new_order:
 
-            state[
-                "turn_index"
-            ] = 0
+            state["turn_index"] = 0
 
         else:
 
-            state[
-                "turn_index"
-            ] = (
+            state["turn_index"] = (
                 state.get(
                     "turn_index",
                     0
@@ -273,20 +756,17 @@ class LudoGameConsumer(
         )
 
         if not order:
+
             return False
 
         current_color = (
-            order[
-                state["turn_index"]
-            ]
+            order[state["turn_index"]]
         )
 
         assigned_color = (
             state[
                 "player_assignments"
-            ].get(
-                self.player_token
-            )
+            ].get(self.player_token)
         )
 
         return (
@@ -312,6 +792,7 @@ class LudoGameConsumer(
         ].items():
 
             if assigned_color == color:
+
                 return device_token
 
         return None
@@ -353,62 +834,10 @@ class LudoGameConsumer(
 
         return finalize_wager_game(
             game_id=game_id,
-            winning_device_token=winning_device_token,
+            winning_device_token=(
+                winning_device_token
+            ),
         )
-
-        # ======================================================
-    # ENSURE GAME ROOM (PERMANENT FIX)
-    # ======================================================
-
-    @database_sync_to_async
-    def ensure_game_room_exists(
-        self,
-        game_id,
-        state
-    ):
-
-        from .models import (
-            GameRoom,
-            UserProfileBalance,
-        )
-
-        game = (
-            GameRoom.objects
-            .filter(game_id=game_id)
-            .first()
-        )
-
-        if game:
-            return game
-
-        assignments = state.get(
-            "player_assignments",
-            {}
-        )
-
-        bet_amount = int(
-            state.get("bet_amount", 0)
-        )
-
-        game = GameRoom.objects.create(
-            game_id=game_id,
-            bet_amount=bet_amount,
-            game_status="ACTIVE",
-            total_pool_escrow=bet_amount * len(assignments),
-        )
-
-        for device_token in assignments.keys():
-
-            profile = (
-                UserProfileBalance.objects
-                .filter(device_token=device_token)
-                .first()
-            )
-
-            if profile:
-                game.players.add(profile)
-
-        return game
 
     # ======================================================
     # HANDLE WINNER
@@ -419,10 +848,6 @@ class LudoGameConsumer(
         state,
         winning_color
     ):
-
-        # --------------------------------------------------
-        # Find winner device
-        # --------------------------------------------------
 
         winning_device_token = (
             self.get_device_for_color(
@@ -441,7 +866,8 @@ class LudoGameConsumer(
                 "status_text"
             ] = (
                 "Winner detected, but "
-                "player identity could not be found."
+                "player identity could "
+                "not be found."
             )
 
             print(
@@ -453,14 +879,11 @@ class LudoGameConsumer(
 
             return
 
-        # --------------------------------------------------
-        # Database payout
-        # --------------------------------------------------
-           
-        await self.ensure_game_room_exists(
+        await _ensure_game_room_exists(
             self.game_id,
-            state
+            state,
         )
+
         try:
 
             result = await self.payout_winner(
@@ -478,21 +901,19 @@ class LudoGameConsumer(
                 "status_text"
             ] = (
                 "Winner detected, but an "
-                "internal payout error occurred."
+                "internal payout error "
+                "occurred."
             )
 
             print(
                 f"❌ PAYOUT EXCEPTION | "
                 f"Game={self.game_id} | "
-                f"Winner={winning_device_token} | "
+                f"Winner="
+                f"{winning_device_token} | "
                 f"Error={e}"
             )
 
             return
-
-        # --------------------------------------------------
-        # Validate result
-        # --------------------------------------------------
 
         payout_success = (
             isinstance(result, dict)
@@ -511,12 +932,8 @@ class LudoGameConsumer(
                     "message",
                     "Unknown payout error."
                 )
-                if isinstance(
-                    result,
-                    dict
-                )
-                else
-                "Invalid payout response."
+                if isinstance(result, dict)
+                else "Invalid payout response."
             )
 
             state[
@@ -530,27 +947,20 @@ class LudoGameConsumer(
             print(
                 f"❌ PAYOUT FAILED | "
                 f"Game={self.game_id} | "
-                f"Winner={winning_device_token} | "
+                f"Winner="
+                f"{winning_device_token} | "
                 f"Reason={error_message}"
             )
 
             return
 
-        # --------------------------------------------------
-        # Successful payout
-        # --------------------------------------------------
-
-        state[
-            "winner"
-        ] = winning_color
+        state["winner"] = winning_color
 
         state[
             "winner_device_token"
         ] = winning_device_token
 
-        state[
-            "game_status"
-        ] = "COMPLETED"
+        state["game_status"] = "COMPLETED"
 
         state[
             "winner_payout"
@@ -591,10 +1001,126 @@ class LudoGameConsumer(
             f"🏆 GAME WON | "
             f"Game={self.game_id} | "
             f"Winner={winning_color} | "
-            f"Device={winning_device_token} | "
-            f"Payout={state['winner_payout']} | "
+            f"Device="
+            f"{winning_device_token} | "
+            f"Payout="
+            f"{state['winner_payout']} | "
             f"Fee={state['platform_fee']}"
         )
+
+    # ======================================================
+    # HANDLE SURRENDER
+    # ======================================================
+
+    async def handle_surrender(
+        self,
+        state
+    ):
+
+        current_status = state.get(
+            "game_status"
+        )
+
+        # ==================================================
+        # CASE 1 — GAME ACTIVE
+        # ==================================================
+
+        if current_status == "ACTIVE":
+
+            opponent_color = None
+            opponent_token = None
+
+            for (
+                token,
+                color
+            ) in state[
+                "player_assignments"
+            ].items():
+
+                if token != self.player_token:
+
+                    opponent_color = color
+                    opponent_token = token
+
+                    break
+
+            if not opponent_color:
+
+                state[
+                    "game_status"
+                ] = "CANCELLED"
+
+                state[
+                    "status_text"
+                ] = (
+                    "Player left before "
+                    "game started."
+                )
+
+                await self.broadcast_current_state()
+
+                return
+
+            leaver_color = (
+                state[
+                    "player_assignments"
+                ].get(self.player_token)
+            )
+
+            state[
+                "status_text"
+            ] = (
+                f"{leaver_color} surrendered! "
+                f"{opponent_color} wins."
+            )
+
+            print(
+                f"🏳️ SURRENDER | "
+                f"Game={self.game_id} | "
+                f"Leaver={self.player_token} "
+                f"({leaver_color}) | "
+                f"Winner={opponent_token} "
+                f"({opponent_color})"
+            )
+
+            await self.handle_game_winner(
+                state,
+                opponent_color
+            )
+
+            await self.broadcast_current_state()
+
+            return
+
+        # ==================================================
+        # CASE 2 — GAME IN LOBBY
+        # ==================================================
+
+        if current_status == "LOBBY":
+
+            state[
+                "game_status"
+            ] = "CANCELLED"
+
+            state[
+                "status_text"
+            ] = "Player cancelled the match."
+
+            print(
+                f"🚪 LOBBY CANCELLED | "
+                f"Game={self.game_id} | "
+                f"Player={self.player_token}"
+            )
+
+            await self.broadcast_current_state()
+
+            return
+
+        # ==================================================
+        # CASE 3 — Already COMPLETED
+        # ==================================================
+
+        await self.broadcast_current_state()
 
     # ======================================================
     # RECEIVE
@@ -607,48 +1133,42 @@ class LudoGameConsumer(
 
         try:
 
-            data = json.loads(
-                text_data
-            )
+            data = json.loads(text_data)
 
         except Exception:
 
             return
 
-        action = data.get(
-            "action"
-        )
+        action = data.get("action")
 
         state = ACTIVE_GAMES.get(
             self.game_id
         )
 
         if not state:
-            return
-
-        # ==================================================
-        # IMPORTANT
-        # ==================================================
-
-        self.normalize_turn_order(
-            state
-        )
-
-        # ==================================================
-        # GAME ALREADY FINISHED
-        # ==================================================
-
-        if state.get(
-            "game_status"
-        ) == "COMPLETED":
-
-            await self.broadcast_current_state()
 
             return
 
-        if state.get(
-            "game_status"
-        ) == "PAYOUT_ERROR":
+        self.normalize_turn_order(state)
+
+        # ==================================================
+        # SURRENDER
+        # ==================================================
+
+        if action == "surrender":
+
+            await self.handle_surrender(state)
+
+            return
+
+        # ==================================================
+        # Already finished
+        # ==================================================
+
+        if state.get("game_status") in (
+            "COMPLETED",
+            "PAYOUT_ERROR",
+        ):
 
             await self.broadcast_current_state()
 
@@ -667,103 +1187,13 @@ class LudoGameConsumer(
                 print(
                     f"⚠️ REJECTED ROLL | "
                     f"Game={self.game_id} | "
-                    f"Player={self.player_token}"
+                    f"Player="
+                    f"{self.player_token}"
                 )
 
                 return
 
-            await self.handle_dice_roll(
-                state
-            )
-
-        # ==================================================
-        # TEST FINISH BLUE
-        # ==================================================
-
-        elif action == "test_finish_blue":
-
-            print(
-                f"🧪 TEST FINISH BLUE | "
-                f"Game={self.game_id} | "
-                f"RequestedBy={self.player_token}"
-            )
-
-            if state.get(
-                "game_status"
-            ) in (
-                "COMPLETED",
-                "PAYOUT_ERROR",
-            ):
-
-                await self.broadcast_current_state()
-
-                return
-
-            # --------------------------------------------------
-            # Find BLUE tokens
-            # --------------------------------------------------
-
-            blue_tokens = [
-                token
-                for token in state["tokens"]
-                if token["color"] == "BLUE"
-            ]
-
-            if len(blue_tokens) != 4:
-
-                state[
-                    "status_text"
-                ] = (
-                    "TEST ERROR: "
-                    "BLUE does not have 4 tokens."
-                )
-
-                await self.broadcast_current_state()
-
-                return
-
-            # --------------------------------------------------
-            # Finish BLUE
-            # --------------------------------------------------
-
-            for token in blue_tokens:
-
-                token[
-                    "position"
-                ] = 56
-
-            # --------------------------------------------------
-            # Force winner - TEST ONLY, no payout
-            # --------------------------------------------------
-
-            state[
-                "winner"
-            ] = "BLUE"
-
-            state[
-                "winner_device_token"
-            ] = self.get_device_for_color(
-                state,
-                "BLUE"
-            )
-
-            state[
-                "game_status"
-            ] = "COMPLETED"
-
-            state[
-                "has_rolled"
-            ] = False
-
-            state[
-                "status_text"
-            ] = (
-                "BLUE WON! (TEST)"
-            )
-
-            await self.broadcast_current_state()
-
-            return
+            await self.handle_dice_roll(state)
 
         # ==================================================
         # MOVE TOKEN
@@ -778,7 +1208,8 @@ class LudoGameConsumer(
                 print(
                     f"⚠️ REJECTED MOVE | "
                     f"Game={self.game_id} | "
-                    f"Player={self.player_token}"
+                    f"Player="
+                    f"{self.player_token}"
                 )
 
                 return
@@ -788,10 +1219,6 @@ class LudoGameConsumer(
                 data.get("token_id"),
                 data.get("color")
             )
-
-        # ==================================================
-        # BROADCAST
-        # ==================================================
 
         await self.broadcast_current_state()
 
@@ -804,37 +1231,24 @@ class LudoGameConsumer(
         state
     ):
 
-        self.normalize_turn_order(
-            state
-        )
+        self.normalize_turn_order(state)
 
-        if state[
-            "has_rolled"
-        ]:
+        if state["has_rolled"]:
 
             return
 
-        roll = random.randint(
-            1,
-            6
-        )
+        roll = random.randint(1, 6)
 
         state[
             "current_dice_value"
         ] = roll
 
-        state[
-            "has_rolled"
-        ] = True
+        state["has_rolled"] = True
 
         current_player = (
             state[
                 "player_turn_order"
-            ][
-                state[
-                    "turn_index"
-                ]
-            ]
+            ][state["turn_index"]]
         )
 
         player_tokens = [
@@ -848,60 +1262,40 @@ class LudoGameConsumer(
 
         for token in player_tokens:
 
-            # --------------------------------------------------
-            # Yard
-            # --------------------------------------------------
-
             if (
-                token["position"]
-                == -1
+                token["position"] == -1
                 and roll == 6
             ):
 
                 valid_moves += 1
 
-            # --------------------------------------------------
-            # Board
-            # --------------------------------------------------
-
             elif (
-                0 <= token["position"] <= 55
-                and token["position"]
-                + roll <= 56
+                0
+                <= token["position"]
+                <= 55
+                and (
+                    token["position"]
+                    + roll
+                    <= 56
+                )
             ):
 
                 valid_moves += 1
 
-        # ==================================================
-        # NO VALID MOVES
-        # ==================================================
-
         if valid_moves == 0:
 
-            state[
-                "has_rolled"
-            ] = False
+            state["has_rolled"] = False
 
-            state[
-                "turn_index"
-            ] = (
-                state[
-                    "turn_index"
-                ] + 1
+            state["turn_index"] = (
+                state["turn_index"] + 1
             ) % len(
-                state[
-                    "player_turn_order"
-                ]
+                state["player_turn_order"]
             )
 
             next_player = (
                 state[
                     "player_turn_order"
-                ][
-                    state[
-                        "turn_index"
-                    ]
-                ]
+                ][state["turn_index"]]
             )
 
             state[
@@ -932,31 +1326,19 @@ class LudoGameConsumer(
         color
     ):
 
-        if not state[
-            "has_rolled"
-        ]:
+        if not state["has_rolled"]:
 
             return
 
-        self.normalize_turn_order(
-            state
-        )
+        self.normalize_turn_order(state)
 
         current_player = (
             state[
                 "player_turn_order"
-            ][
-                state[
-                    "turn_index"
-                ]
-            ]
+            ][state["turn_index"]]
         )
 
-        # --------------------------------------------------
-        # Color verification
-        # --------------------------------------------------
-
-        if color!= current_player:
+        if color != current_player:
 
             state[
                 "status_text"
@@ -967,19 +1349,13 @@ class LudoGameConsumer(
 
             return
 
-        # --------------------------------------------------
-        # Find token
-        # --------------------------------------------------
-
         token = next(
             (
                 token
                 for token in state["tokens"]
                 if (
-                    token["id"]
-                    == token_id
-                    and token["color"]
-                    == color
+                    token["id"] == token_id
+                    and token["color"] == color
                 )
             ),
             None
@@ -989,9 +1365,7 @@ class LudoGameConsumer(
 
             return
 
-        roll = state[
-            "current_dice_value"
-        ]
+        roll = state["current_dice_value"]
 
         move_executed = False
 
@@ -999,18 +1373,16 @@ class LudoGameConsumer(
             roll == 6
         )
 
-        # ==================================================
-        # BASE YARD
-        # ==================================================
+        # ----------------------------------------------
+        # Base yard
+        # ----------------------------------------------
 
         if (
             token["position"] == -1
             and roll == 6
         ):
 
-            token[
-                "position"
-            ] = 0
+            token["position"] = 0
 
             move_executed = True
 
@@ -1021,17 +1393,18 @@ class LudoGameConsumer(
                 f"out of the base!"
             )
 
-        # ==================================================
-        # NORMAL MOVEMENT
-        # ==================================================
+        # ----------------------------------------------
+        # Normal movement
+        # ----------------------------------------------
 
         elif (
-            0 <= token["position"] <= 55
+            0
+            <= token["position"]
+            <= 55
         ):
 
             target_destination = (
-                token["position"]
-                + roll
+                token["position"] + roll
             )
 
             if target_destination <= 56:
@@ -1048,10 +1421,6 @@ class LudoGameConsumer(
                     f"{color} moved a token "
                     f"forward by {roll}."
                 )
-
-                # ==========================================
-                # COLLISION
-                # ==========================================
 
                 target_global_cell = (
                     get_global_cell_index(
@@ -1073,9 +1442,10 @@ class LudoGameConsumer(
 
                         if (
                             enemy_token["color"]
-                           != color
-                            and enemy_token["position"]
-                            >= 0
+                            != color
+                            and enemy_token[
+                                "position"
+                            ] >= 0
                         ):
 
                             enemy_global_cell = (
@@ -1109,45 +1479,32 @@ class LudoGameConsumer(
                                     f"Bonus roll granted."
                                 )
 
-        # ==================================================
-        # INVALID MOVE
-        # ==================================================
-
         if not move_executed:
 
             state[
                 "status_text"
             ] = (
-                "Invalid move for that token! "
-                f"{color}, select a valid token."
+                "Invalid move for that "
+                f"token! {color}, select "
+                "a valid token."
             )
 
             return
 
-        # ==================================================
-        # CLEAR ROLL
-        # ==================================================
+        state["has_rolled"] = False
 
-        state[
-            "has_rolled"
-        ] = False
-
-        # ==================================================
-        # WIN CHECK
-        # ==================================================
+        # ----------------------------------------------
+        # Win check
+        # ----------------------------------------------
 
         if self.has_player_won(
             state,
             color
         ):
 
-            state[
-                "winner"
-            ] = color
+            state["winner"] = color
 
-            state[
-                "game_status"
-            ] = "WON"
+            state["game_status"] = "WON"
 
             state[
                 "status_text"
@@ -1163,13 +1520,11 @@ class LudoGameConsumer(
 
             return
 
-        # ==================================================
-        # TOKEN REACHED HOME
-        # ==================================================
+        # ----------------------------------------------
+        # Reached home
+        # ----------------------------------------------
 
-        if token[
-            "position"
-        ] == 56:
+        if token["position"] == 56:
 
             grant_bonus_roll = True
 
@@ -1180,36 +1535,24 @@ class LudoGameConsumer(
                 f"Bonus roll granted."
             )
 
-        # ==================================================
-        # TURN CHANGE
-        # ==================================================
+        # ----------------------------------------------
+        # Turn change
+        # ----------------------------------------------
 
         if not grant_bonus_roll:
 
-            self.normalize_turn_order(
-                state
-            )
+            self.normalize_turn_order(state)
 
-            state[
-                "turn_index"
-            ] = (
-                state[
-                    "turn_index"
-                ] + 1
+            state["turn_index"] = (
+                state["turn_index"] + 1
             ) % len(
-                state[
-                    "player_turn_order"
-                ]
+                state["player_turn_order"]
             )
 
             next_player = (
                 state[
                     "player_turn_order"
-                ][
-                    state[
-                        "turn_index"
-                    ]
-                ]
+                ][state["turn_index"]]
             )
 
             state[
@@ -1241,11 +1584,10 @@ class LudoGameConsumer(
         )
 
         if not state:
+
             return
 
-        self.normalize_turn_order(
-            state
-        )
+        self.normalize_turn_order(state)
 
         await self.channel_layer.group_send(
             self.room_group_name,
@@ -1268,15 +1610,11 @@ class LudoGameConsumer(
     ):
 
         await self.send(
-            text_data=json.dumps(
-                {
-                    "status":
-                        "success",
+            text_data=json.dumps({
+                "status":
+                    "success",
 
-                    "game_state":
-                        event[
-                            "payload"
-                        ],
-                }
-            )
+                "game_state":
+                    event["payload"],
+            })
         )

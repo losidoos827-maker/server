@@ -3,12 +3,20 @@ import json
 from django.contrib import messages
 from django.db import transaction
 from django.http import JsonResponse
+
 from django.shortcuts import (
     get_object_or_404,
     redirect,
     render,
 )
-from django.views.decorators.csrf import csrf_exempt
+
+from django.views.decorators.csrf import (
+    csrf_exempt,
+)
+
+from django.contrib.admin.views.decorators import (
+    staff_member_required,
+)
 
 from ..models import (
     DepositRequest,
@@ -18,24 +26,35 @@ from ..models import (
 
 
 # ==========================================
-# MOBILE DEPOSIT
+# MOBILE DEPOSIT  (public, csrf-exempt)
 # ==========================================
 
 @csrf_exempt
 def submit_deposit_request(request):
 
     if request.method != "POST":
+
         return JsonResponse(
             {"error": "POST required"},
             status=405,
         )
 
     try:
+
         data = json.loads(request.body)
 
-        device_token = data.get("device_token")
-        amount = int(data.get("amount", 0))
-        method = data.get("payment_method")
+        device_token = data.get(
+            "device_token"
+        )
+
+        amount = int(
+            data.get("amount", 0)
+        )
+
+        method = data.get(
+            "payment_method"
+        )
+
         sender_name = data.get(
             "sender_name",
             "",
@@ -46,6 +65,7 @@ def submit_deposit_request(request):
             or amount <= 0
             or not method
         ):
+
             return JsonResponse(
                 {
                     "error": (
@@ -65,10 +85,14 @@ def submit_deposit_request(request):
         )
 
         return JsonResponse({
-            "status": "success",
-            "message": (
-                "Verification submitted successfully!"
-            ),
+            "status":
+                "success",
+
+            "message":
+                (
+                    "Verification submitted "
+                    "successfully!"
+                ),
         })
 
     except (
@@ -76,14 +100,17 @@ def submit_deposit_request(request):
         ValueError,
         TypeError,
     ):
+
         return JsonResponse(
             {
-                "error": "Invalid request payload."
+                "error":
+                    "Invalid request payload."
             },
             status=400,
         )
 
     except Exception as exc:
+
         return JsonResponse(
             {"error": str(exc)},
             status=400,
@@ -94,6 +121,7 @@ def submit_deposit_request(request):
 # ADMIN DEPOSIT DASHBOARD
 # ==========================================
 
+@staff_member_required
 def custom_deposit_dashboard(request):
 
     deposits = (
@@ -103,7 +131,8 @@ def custom_deposit_dashboard(request):
     )
 
     context = {
-        "deposit_items": deposits
+        "deposit_items":
+            deposits
     }
 
     if (
@@ -112,6 +141,7 @@ def custom_deposit_dashboard(request):
             "x-requested-with"
         ) == "XMLHttpRequest"
     ):
+
         return render(
             request,
             "deposit_table_partial.html",
@@ -126,10 +156,10 @@ def custom_deposit_dashboard(request):
 
 
 # ==========================================
-# APPROVE DEPOSIT
+# APPROVE DEPOSIT (staff only)
 # ==========================================
 
-@csrf_exempt
+@staff_member_required
 def approve_deposit_custom(
     request,
     deposit_id,
@@ -147,7 +177,9 @@ def approve_deposit_custom(
             UserProfileBalance.objects
             .select_for_update()
             .get_or_create(
-                device_token=deposit.device_token
+                device_token=(
+                    deposit.device_token
+                )
             )
         )
 
@@ -171,22 +203,28 @@ def approve_deposit_custom(
         )
 
     if (
-        request.headers.get("x-requested-with")
-        == "XMLHttpRequest"
+        request.headers.get(
+            "x-requested-with"
+        ) == "XMLHttpRequest"
     ):
+
         return JsonResponse({
-            "status": "success",
-            "message": (
-                f"Approved {deposit.amount} "
-                "coins successfully!"
-            ),
+            "status":
+                "success",
+
+            "message":
+                (
+                    f"Approved {deposit.amount} "
+                    "coins successfully!"
+                ),
         })
 
     messages.success(
         request,
         (
             f"Approved {deposit.amount} coins "
-            f"for {deposit.device_token} successfully!"
+            f"for {deposit.device_token} "
+            f"successfully!"
         ),
     )
 
@@ -196,10 +234,10 @@ def approve_deposit_custom(
 
 
 # ==========================================
-# REJECT DEPOSIT
+# REJECT DEPOSIT (staff only)
 # ==========================================
 
-@csrf_exempt
+@staff_member_required
 def reject_deposit_custom(
     request,
     deposit_id,
@@ -218,12 +256,17 @@ def reject_deposit_custom(
     )
 
     if (
-        request.headers.get("x-requested-with")
-        == "XMLHttpRequest"
+        request.headers.get(
+            "x-requested-with"
+        ) == "XMLHttpRequest"
     ):
+
         return JsonResponse({
-            "status": "success",
-            "message": "Deposit request rejected.",
+            "status":
+                "success",
+
+            "message":
+                "Deposit request rejected.",
         })
 
     messages.error(

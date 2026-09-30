@@ -3,12 +3,18 @@ from django.shortcuts import (
     redirect,
 )
 
+from django.contrib.admin.views.decorators import (
+    staff_member_required,
+)
+
 from ..models import SystemSetting
+
 
 # ==========================================
 # GIFT CONTROL DASHBOARD
 # ==========================================
 
+@staff_member_required
 def gift_control_dashboard(request):
 
     if request.method == "POST":
@@ -26,14 +32,16 @@ def gift_control_dashboard(request):
         SystemSetting.objects.update_or_create(
             key="gift_enabled",
             defaults={
-                "value": gift_enabled,
+                "value":
+                    gift_enabled,
             },
         )
 
         SystemSetting.objects.update_or_create(
             key="paid_spin_cost",
             defaults={
-                "value": paid_spin_cost,
+                "value":
+                    paid_spin_cost,
             },
         )
 
@@ -55,8 +63,10 @@ def gift_control_dashboard(request):
         request,
         "gift_control.html",
         {
-            "gift_enabled": gift_enabled,
-            "paid_spin_cost": paid_spin_cost,
+            "gift_enabled":
+                gift_enabled,
+
+            "paid_spin_cost":
+                paid_spin_cost,
         },
     )
-    

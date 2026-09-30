@@ -8,10 +8,14 @@ from ..models import (
 )
 
 
-def get_transaction_history(request, device_token):
-    """
-    Return combined deposit and withdrawal history.
-    """
+# ==========================================================
+# TRANSACTION HISTORY
+# ==========================================================
+
+def get_transaction_history(
+    request,
+    device_token,
+):
 
     transactions = []
 
@@ -22,11 +26,19 @@ def get_transaction_history(request, device_token):
     )
 
     for deposit in deposits:
+
         transactions.append({
-            "type": "DEPOSIT",
-            "amount": deposit.amount,
-            "status": deposit.status,
-            "date": deposit.created_at,
+            "type":
+                "DEPOSIT",
+
+            "amount":
+                deposit.amount,
+
+            "status":
+                deposit.status,
+
+            "date":
+                deposit.created_at,
         })
 
     withdrawals = (
@@ -36,30 +48,46 @@ def get_transaction_history(request, device_token):
     )
 
     for withdrawal in withdrawals:
+
         transactions.append({
-            "type": "WITHDRAWAL",
-            "amount": withdrawal.amount,
-            "status": withdrawal.status,
-            "date": withdrawal.created_at,
+            "type":
+                "WITHDRAWAL",
+
+            "amount":
+                withdrawal.amount,
+
+            "status":
+                withdrawal.status,
+
+            "date":
+                withdrawal.created_at,
         })
 
-    # Sort using actual datetime instead of
-    # formatted date strings.
     transactions.sort(
         key=lambda item: item["date"],
         reverse=True,
     )
 
     for item in transactions:
-        item["date"] = item["date"].strftime(
+
+        item["date"] = item[
+            "date"
+        ].strftime(
             "%d %b %Y, %I:%M %p"
         )
 
     return JsonResponse({
-        "status": "success",
-        "transactions": transactions,
+        "status":
+            "success",
+
+        "transactions":
+            transactions,
     })
 
+
+# ==========================================================
+# ACTIVE PAYMENT DETAILS
+# ==========================================================
 
 def get_active_payment_details(request):
 
@@ -69,20 +97,36 @@ def get_active_payment_details(request):
     )
 
     data = {
+
         method.method_type: {
-            "name": method.account_name,
-            "number": method.account_number,
+
+            "name":
+                method.account_name,
+
+            "number":
+                method.account_number,
         }
+
         for method in methods
     }
 
     return JsonResponse({
-        "status": "success",
-        "methods": data,
+        "status":
+            "success",
+
+        "methods":
+            data,
     })
 
 
-def get_user_balance(request, device_token):
+# ==========================================================
+# USER BALANCE
+# ==========================================================
+
+def get_user_balance(
+    request,
+    device_token,
+):
 
     profile, _ = (
         UserProfileBalance.objects
@@ -92,6 +136,12 @@ def get_user_balance(request, device_token):
     )
 
     return JsonResponse({
-        "status": "success",
-        "coins": profile.coins,
+        "status":
+            "success",
+
+        "coins":
+            profile.coins,
+
+        "locked_coins":
+            profile.locked_coins,
     })

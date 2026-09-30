@@ -7,6 +7,13 @@ from .views.games import (
     cancel_game_wager,
 )
 
+from .views.game_rooms import (
+    create_private_room,
+    join_private_room,
+    cancel_private_room,
+    get_private_room_status,
+)
+
 from .views.auth import (
     verify_email_login,
     send_otp,
@@ -57,6 +64,11 @@ from .views.admin import (
     custom_admin_settings,
     finance_management_dashboard,
 )
+
+from .views.config import (
+    get_app_config,
+)
+
 
 urlpatterns = [
 
@@ -135,6 +147,16 @@ urlpatterns = [
     ),
 
     # --------------------------
+    # APP CONFIG
+    # --------------------------
+
+    path(
+        "api/config/app/",
+        get_app_config,
+        name="app_config",
+    ),
+
+    # --------------------------
     # GIFT / LUCKY SPIN
     # --------------------------
 
@@ -163,7 +185,7 @@ urlpatterns = [
     ),
 
     # --------------------------
-    # WAGER / GAME
+    # WAGER / GAME — PUBLIC MATCHMAKING
     # --------------------------
 
     path(
@@ -184,6 +206,34 @@ urlpatterns = [
         name="cancel_game_wager",
     ),
 
+    # --------------------------
+    # PRIVATE / FRIEND ROOMS
+    # --------------------------
+
+    path(
+        "api/game/create-room/",
+        create_private_room,
+        name="create_private_room",
+    ),
+
+    path(
+        "api/game/join-room/",
+        join_private_room,
+        name="join_private_room",
+    ),
+
+    path(
+        "api/game/cancel-room/",
+        cancel_private_room,
+        name="cancel_private_room",
+    ),
+
+    path(
+        "api/game/room-status/<str:game_id>/",
+        get_private_room_status,
+        name="get_private_room_status",
+    ),
+
     # ==========================================================
     # 🛡️ CUSTOM MANAGEMENT ADMIN PORTAL
     # ==========================================================
@@ -201,13 +251,19 @@ urlpatterns = [
     ),
 
     path(
-        "management/dashboard/deposits/approve/<int:deposit_id>/",
+        (
+            "management/dashboard/deposits/"
+            "approve/<int:deposit_id>/"
+        ),
         approve_deposit_custom,
         name="approve_deposit_custom",
     ),
 
     path(
-        "management/dashboard/deposits/reject/<int:deposit_id>/",
+        (
+            "management/dashboard/deposits/"
+            "reject/<int:deposit_id>/"
+        ),
         reject_deposit_custom,
         name="reject_deposit_custom",
     ),
@@ -219,13 +275,19 @@ urlpatterns = [
     ),
 
     path(
-        "management/dashboard/withdrawals/approve/<int:withdraw_id>/",
+        (
+            "management/dashboard/withdrawals/"
+            "approve/<int:withdraw_id>/"
+        ),
         approve_withdrawal_custom,
         name="approve_withdrawal_custom",
     ),
 
     path(
-        "management/dashboard/withdrawals/reject/<int:withdraw_id>/",
+        (
+            "management/dashboard/withdrawals/"
+            "reject/<int:withdraw_id>/"
+        ),
         reject_withdrawal_custom,
         name="reject_withdrawal_custom",
     ),
