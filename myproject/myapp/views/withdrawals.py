@@ -2,12 +2,20 @@ import json
 
 from django.contrib import messages
 from django.http import JsonResponse
+
 from django.shortcuts import (
     get_object_or_404,
     redirect,
     render,
 )
-from django.views.decorators.csrf import csrf_exempt
+
+from django.views.decorators.csrf import (
+    csrf_exempt,
+)
+
+from django.contrib.admin.views.decorators import (
+    staff_member_required,
+)
 
 from ..models import (
     WithdrawalRequest,
@@ -20,26 +28,40 @@ from ..services.wager_service import (
 
 
 # ==========================================
-# MOBILE WITHDRAWAL
+# MOBILE WITHDRAWAL  (public, csrf-exempt)
 # ==========================================
 
 @csrf_exempt
 def submit_withdrawal_request(request):
 
     if request.method != "POST":
+
         return JsonResponse(
             {"error": "POST required"},
             status=405,
         )
 
     try:
+
         data = json.loads(request.body)
 
-        device_token = data.get("device_token")
-        amount = int(data.get("amount", 0))
+        device_token = data.get(
+            "device_token"
+        )
+
+        amount = int(
+            data.get("amount", 0)
+        )
+
         method = data.get("method")
-        account_title = data.get("account_title")
-        account_number = data.get("account_number")
+
+        account_title = data.get(
+            "account_title"
+        )
+
+        account_number = data.get(
+            "account_number"
+        )
 
         if not all([
             device_token,
@@ -48,6 +70,7 @@ def submit_withdrawal_request(request):
             account_title,
             account_number,
         ]):
+
             return JsonResponse(
                 {
                     "error": (
@@ -66,6 +89,7 @@ def submit_withdrawal_request(request):
         )
 
         if profile.coins < amount:
+
             return JsonResponse(
                 {
                     "error": (
@@ -86,10 +110,14 @@ def submit_withdrawal_request(request):
         )
 
         return JsonResponse({
-            "status": "success",
-            "message": (
-                "Withdrawal request logged successfully!"
-            ),
+            "status":
+                "success",
+
+            "message":
+                (
+                    "Withdrawal request logged "
+                    "successfully!"
+                ),
         })
 
     except (
@@ -97,14 +125,17 @@ def submit_withdrawal_request(request):
         ValueError,
         TypeError,
     ):
+
         return JsonResponse(
             {
-                "error": "Invalid request payload."
+                "error":
+                    "Invalid request payload."
             },
             status=400,
         )
 
     except Exception as exc:
+
         return JsonResponse(
             {"error": str(exc)},
             status=400,
@@ -115,6 +146,7 @@ def submit_withdrawal_request(request):
 # ADMIN WITHDRAWAL DASHBOARD
 # ==========================================
 
+@staff_member_required
 def custom_withdrawal_dashboard(request):
 
     withdrawals = (
@@ -130,20 +162,29 @@ def custom_withdrawal_dashboard(request):
         profile, _ = (
             UserProfileBalance.objects
             .get_or_create(
-                device_token=withdrawal.device_token
+                device_token=(
+                    withdrawal.device_token
+                )
             )
         )
 
         withdrawal_items.append({
-            "request": withdrawal,
-            "current_balance": profile.coins,
-            "has_enough": (
-                profile.coins >= withdrawal.amount
-            ),
+            "request":
+                withdrawal,
+
+            "current_balance":
+                profile.coins,
+
+            "has_enough":
+                (
+                    profile.coins
+                    >= withdrawal.amount
+                ),
         })
 
     context = {
-        "withdrawal_items": withdrawal_items
+        "withdrawal_items":
+            withdrawal_items
     }
 
     if (
@@ -152,6 +193,7 @@ def custom_withdrawal_dashboard(request):
             "x-requested-with"
         ) == "XMLHttpRequest"
     ):
+
         return render(
             request,
             "withdrawal_table_partial.html",
@@ -166,10 +208,10 @@ def custom_withdrawal_dashboard(request):
 
 
 # ==========================================
-# APPROVE WITHDRAWAL
+# APPROVE WITHDRAWAL (staff only)
 # ==========================================
 
-@csrf_exempt
+@staff_member_required
 def approve_withdrawal_custom(
     request,
     withdraw_id,
@@ -182,13 +224,15 @@ def approve_withdrawal_custom(
     )
 
     result = process_withdrawal_approval(
-        withdrawal
+        withdrawal.id
     )
 
     if (
-        request.headers.get("x-requested-with")
-        == "XMLHttpRequest"
+        request.headers.get(
+            "x-requested-with"
+        ) == "XMLHttpRequest"
     ):
+
         return JsonResponse(
             result,
             status=(
@@ -199,11 +243,14 @@ def approve_withdrawal_custom(
         )
 
     if result["status"] == "success":
+
         messages.success(
             request,
             result["message"],
         )
+
     else:
+
         messages.error(
             request,
             result["message"],
@@ -215,10 +262,10 @@ def approve_withdrawal_custom(
 
 
 # ==========================================
-# REJECT WITHDRAWAL
+# REJECT WITHDRAWAL (staff only)
 # ==========================================
 
-@csrf_exempt
+@staff_member_required
 def reject_withdrawal_custom(
     request,
     withdraw_id,
@@ -237,14 +284,17 @@ def reject_withdrawal_custom(
     )
 
     if (
-        request.headers.get("x-requested-with")
-        == "XMLHttpRequest"
+        request.headers.get(
+            "x-requested-with"
+        ) == "XMLHttpRequest"
     ):
+
         return JsonResponse({
-            "status": "success",
-            "message": (
-                "Withdrawal request cancelled."
-            ),
+            "status":
+                "success",
+
+            "message":
+                "Withdrawal request cancelled.",
         })
 
     messages.warning(

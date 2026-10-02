@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-ky24h-n*3eb)@sqyd)3ti_5$g$t9fw(q+q%q$_wgfp331vf6dy'
+SECRET_KEY = 'django-insecure-e3nn6_faorsklka@i7l_y^pu36b^zol-py$ezb#+pi9tn8vebz'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -34,6 +34,7 @@ ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = [
     'daphne',
+    "jazzmin",   # ← ye sabse upar, django.contrib.admin se PEHLE
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -45,6 +46,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -126,3 +128,271 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Email OTP Setup
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'bedrockentertainent@gmail.com'
+EMAIL_HOST_PASSWORD = 'zgksulcwmczlqvvm'
+
+# ....................................................................................
+# STATIC & MEDIA FILES
+# ....................................................................................
+
+STATIC_URL = "/static/"
+
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+STATICFILES_STORAGE = (
+    "whitenoise.storage."
+    "CompressedManifestStaticFilesStorage"
+)
+
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+
+# ==========================================================
+# ALLOWED HOSTS
+# ==========================================================
+
+ALLOWED_HOSTS = [
+    "127.0.0.1",
+    "localhost",
+    "192.168.18.48",
+]
+
+
+# ==========================================================
+# JAZZMIN ADMIN THEME
+# ==========================================================
+
+JAZZMIN_SETTINGS = {
+
+    # ----------------------------------------------
+    # BRANDING
+    # ----------------------------------------------
+
+    "site_title":
+        "Rocks Games Admin",
+
+    "site_header":
+        "Rocks Games",
+
+    "site_brand":
+        "🎮 Rocks Games",
+
+    "welcome_sign":
+        "Welcome to Rocks Games Admin Panel",
+
+    "copyright":
+        "Rocks Games Ltd",
+
+    "site_logo":
+        None,
+
+    "login_logo":
+        None,
+
+    # ----------------------------------------------
+    # LAYOUT
+    # ----------------------------------------------
+
+    "show_sidebar":
+        True,
+
+    "navigation_expanded":
+        True,
+
+    "hide_apps":
+        [],
+
+    "hide_models":
+        [],
+
+    # ----------------------------------------------
+    # TOP MENU LINKS
+    # ----------------------------------------------
+
+    "topmenu_links": [
+
+        {
+            "name":
+                "🏠 Home",
+
+            "url":
+                "admin:index",
+
+            "permissions":
+                ["auth.view_user"],
+        },
+
+        {
+            "name":
+                "⚙️ Custom Panel",
+
+            "url":
+                "/management/",
+        },
+
+        {
+            "name":
+                "💰 Finance",
+
+            "url":
+                "/dashboard/finance/",
+        },
+
+        {
+            "name":
+                "🎁 Gift Control",
+
+            "url":
+                "/management/dashboard/gift/",
+        },
+    ],
+
+    # ----------------------------------------------
+    # ICONS
+    # ----------------------------------------------
+
+    "icons": {
+
+        "auth":
+            "fas fa-users-cog",
+
+        "auth.user":
+            "fas fa-user",
+
+        "auth.Group":
+            "fas fa-users",
+
+        "myapp.DepositRequest":
+            "fas fa-money-bill-wave",
+
+        "myapp.WithdrawalRequest":
+            "fas fa-money-bill-transfer",
+
+        "myapp.UserProfileBalance":
+            "fas fa-wallet",
+
+        "myapp.SystemPaymentMethod":
+            "fas fa-credit-card",
+
+        "myapp.GameRoom":
+            "fas fa-dice",
+
+        "myapp.SystemTransactionLog":
+            "fas fa-history",
+
+        "myapp.ReferralSystem":
+            "fas fa-user-friends",
+
+        "myapp.SystemSetting":
+            "fas fa-cog",
+
+        "myapp.SystemConfiguration":
+            "fas fa-sliders-h",
+
+        "myapp.GameUser":
+            "fas fa-gamepad",
+    },
+
+    # ----------------------------------------------
+    # THEME
+    # ----------------------------------------------
+
+    "theme":
+        "darkly",
+}
+
+
+# ==========================================================
+# JAZZMIN UI TWEAKS
+# ==========================================================
+
+JAZZMIN_UI_TWEAKS = {
+
+    "navbar_small_text":
+        False,
+
+    "body_small_text":
+        False,
+
+    "brand_small_text":
+        False,
+
+    "brand_colour":
+        "navbar-danger",
+
+    "accent":
+        "accent-warning",
+
+    "navbar":
+        "navbar-dark",
+
+    "no_navbar_border":
+        False,
+
+    "navbar_fixed":
+        True,
+
+    "layout_boxed":
+        False,
+
+    "footer_fixed":
+        False,
+
+    "sidebar_fixed":
+        True,
+
+    "sidebar":
+        "sidebar-dark-danger",
+
+    "sidebar_nav_small_text":
+        False,
+
+    "sidebar_disable_expand":
+        False,
+
+    "sidebar_nav_child_indent":
+        True,
+
+    "sidebar_nav_compact_style":
+        False,
+
+    "sidebar_nav_legacy_style":
+        False,
+
+    "sidebar_nav_flat_style":
+        True,
+
+    "theme":
+        "darkly",
+
+    "dark_mode_theme":
+        "darkly",
+
+    "button_classes": {
+
+        "primary":
+            "btn-primary",
+
+        "secondary":
+            "btn-secondary",
+
+        "info":
+            "btn-info",
+
+        "warning":
+            "btn-warning",
+
+        "danger":
+            "btn-danger",
+
+        "success":
+            "btn-success",
+    },
+}

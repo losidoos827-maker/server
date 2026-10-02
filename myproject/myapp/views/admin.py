@@ -7,6 +7,10 @@ from django.shortcuts import (
     render,
 )
 
+from django.contrib.admin.views.decorators import (
+    staff_member_required,
+)
+
 from ..models import (
     SystemPaymentMethod,
     DepositRequest,
@@ -20,6 +24,7 @@ from ..models import (
 # ADMIN MAIN PORTAL
 # ==========================================
 
+@staff_member_required
 def custom_admin_main_portal(request):
 
     pending_deposits_count = (
@@ -46,8 +51,10 @@ def custom_admin_main_portal(request):
         {
             "pending_deposits_count":
                 pending_deposits_count,
+
             "pending_withdrawals_count":
                 pending_withdrawals_count,
+
             "active_methods_count":
                 active_methods_count,
         },
@@ -58,6 +65,7 @@ def custom_admin_main_portal(request):
 # PAYMENT SETTINGS
 # ==========================================
 
+@staff_member_required
 def custom_admin_settings(request):
 
     methods = (
@@ -106,7 +114,8 @@ def custom_admin_settings(request):
         request,
         "admin_settings.html",
         {
-            "methods": methods
+            "methods":
+                methods
         },
     )
 
@@ -115,6 +124,7 @@ def custom_admin_settings(request):
 # FINANCE MANAGEMENT
 # ==========================================
 
+@staff_member_required
 def finance_management_dashboard(request):
 
     config = SystemConfiguration.get_solo()
@@ -139,6 +149,8 @@ def finance_management_dashboard(request):
             )
         )
 
+        errors = []
+
         try:
 
             withdrawal_commission = int(
@@ -158,32 +170,35 @@ def finance_management_dashboard(request):
                 + winner_payout
                 != 100
             ):
-                messages.error(
-                    request,
-                    (
-                        "Configuration Check Failed: "
-                        "Platform Tax + Winner Payout "
-                        "shares must sum to exactly 100%."
-                    ),
+
+                errors.append(
+                    "Configuration Check Failed: "
+                    "Platform Tax + Winner Payout "
+                    "shares must sum to exactly 100%."
                 )
 
-            elif not 0 <= withdrawal_commission <= 100:
-                messages.error(
-                    request,
-                    (
-                        "Withdrawal commission must "
-                        "be between 0 and 100."
-                    ),
+            if not 0 <= withdrawal_commission <= 100:
+
+                errors.append(
+                    "Withdrawal commission must "
+                    "be between 0 and 100."
                 )
 
-            elif not 0 <= platform_tax <= 100:
-                messages.error(
-                    request,
-                    (
-                        "Platform tax must be "
-                        "between 0 and 100."
-                    ),
+            if not 0 <= platform_tax <= 100:
+
+                errors.append(
+                    "Platform tax must be "
+                    "between 0 and 100."
                 )
+
+            if errors:
+
+                for err in errors:
+
+                    messages.error(
+                        request,
+                        err,
+                    )
 
             else:
 
@@ -213,6 +228,7 @@ def finance_management_dashboard(request):
             ValueError,
             TypeError,
         ):
+
             messages.error(
                 request,
                 (
@@ -250,7 +266,9 @@ def finance_management_dashboard(request):
     admin_profile = (
         UserProfileBalance.objects
         .filter(
-            device_token="SYSTEM_PLATFORM_ADMIN_LEDGER"
+            device_token=(
+                "SYSTEM_PLATFORM_ADMIN_LEDGER"
+            )
         )
         .first()
     )
@@ -264,7 +282,9 @@ def finance_management_dashboard(request):
     normal_profiles = (
         UserProfileBalance.objects
         .exclude(
-            device_token="SYSTEM_PLATFORM_ADMIN_LEDGER"
+            device_token=(
+                "SYSTEM_PLATFORM_ADMIN_LEDGER"
+            )
         )
     )
 
@@ -290,9 +310,12 @@ def finance_management_dashboard(request):
     )
 
     context = {
-        "config": config,
+
+        "config":
+            config,
 
         "metrics": {
+
             "total_credited_inflow":
                 total_credited,
 
@@ -307,6 +330,7 @@ def finance_management_dashboard(request):
         },
 
         "breakdown": {
+
             "approved_deposits":
                 total_credited,
 
