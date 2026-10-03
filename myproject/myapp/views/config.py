@@ -55,6 +55,22 @@ def get_app_config(request):
         "1.0.0",
     )
 
+    # ==========================================================
+    # REFERRAL SHARE TEXT
+    #
+    # {code} placeholder is replaced by the mobile app
+    # with the actual referral code before sharing.
+    # ==========================================================
+
+    referral_share_text = SystemSetting.get_value(
+        "referral_share_text",
+        (
+            "Join me on Rocks Games! 🎮\n\n"
+            "Use my referral code: {code}\n"
+            "We both get 50 coins! 🎁"
+        ),
+    )
+
     return JsonResponse({
         "status":
             "success",
@@ -76,4 +92,7 @@ def get_app_config(request):
 
         "app_version":
             app_version,
+
+        "referral_share_text":
+            referral_share_text,
     })

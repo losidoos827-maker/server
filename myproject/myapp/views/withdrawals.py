@@ -1,6 +1,7 @@
 import json
 
 from django.contrib import messages
+from django.contrib.auth.hashers import check_password
 from django.http import JsonResponse
 
 from django.shortcuts import (
@@ -17,9 +18,12 @@ from django.contrib.admin.views.decorators import (
     staff_member_required,
 )
 
+from django.db import transaction
+
 from ..models import (
     WithdrawalRequest,
     UserProfileBalance,
+    SystemTransactionLog,
 )
 
 from ..services.wager_service import (
@@ -28,7 +32,11 @@ from ..services.wager_service import (
 
 
 # ==========================================
-# MOBILE WITHDRAWAL  (public, csrf-exempt)
+# MOBILE WITHDRAWAL
+#
+# Coins are DEDUCTED immediately at request time.
+# If approved → coins stay deducted.
+# If rejected → coins are REFUNDED back.
 # ==========================================
 
 @csrf_exempt
@@ -63,6 +71,10 @@ def submit_withdrawal_request(request):
             "account_number"
         )
 
+        pin = str(
+            data.get("pin", "")
+        ).strip()
+
         if not all([
             device_token,
             amount > 0,
@@ -81,43 +93,126 @@ def submit_withdrawal_request(request):
                 status=400,
             )
 
-        profile, _ = (
-            UserProfileBalance.objects
-            .get_or_create(
-                device_token=device_token
-            )
-        )
-
-        if profile.coins < amount:
+        if not pin:
 
             return JsonResponse(
                 {
-                    "error": (
-                        "Insufficient wallet balance "
-                        "to request withdrawal"
-                    )
+                    "error":
+                        "Withdrawal PIN is required.",
                 },
                 status=400,
             )
 
-        WithdrawalRequest.objects.create(
-            device_token=device_token,
-            amount=amount,
-            method=method,
-            account_title=account_title,
-            account_number=account_number,
-            status="PENDING",
-        )
+        with transaction.atomic():
+
+            profile = (
+                UserProfileBalance.objects
+                .select_for_update()
+                .filter(device_token=device_token)
+                .first()
+            )
+
+            if not profile:
+
+                return JsonResponse(
+                    {
+                        "error":
+                            "User wallet profile not found.",
+                    },
+                    status=404,
+                )
+
+            # ----------------------------------------------
+            # PIN must be set
+            # ----------------------------------------------
+
+            if not profile.has_withdrawal_pin:
+
+                return JsonResponse(
+                    {
+                        "error": (
+                            "Withdrawal PIN not set. "
+                            "Set your PIN first."
+                        ),
+                        "code": "PIN_NOT_SET",
+                    },
+                    status=400,
+                )
+
+            # ----------------------------------------------
+            # Verify PIN
+            # ----------------------------------------------
+
+            if not check_password(
+                pin,
+                profile.withdrawal_pin_hash,
+            ):
+
+                return JsonResponse(
+                    {
+                        "error": "Incorrect PIN.",
+                        "code": "PIN_INCORRECT",
+                    },
+                    status=400,
+                )
+
+            # ----------------------------------------------
+            # Balance check
+            # ----------------------------------------------
+
+            if profile.coins < amount:
+
+                return JsonResponse(
+                    {
+                        "error": (
+                            "Insufficient wallet balance "
+                            "to request withdrawal"
+                        )
+                    },
+                    status=400,
+                )
+
+            # ==============================================
+            # DEDUCT COINS IMMEDIATELY
+            # ==============================================
+
+            profile.coins -= amount
+            profile.save(update_fields=["coins"])
+
+            # ==============================================
+            # Ledger entry
+            # ==============================================
+
+            withdrawal = WithdrawalRequest.objects.create(
+                device_token=device_token,
+                amount=amount,
+                method=method,
+                account_title=account_title,
+                account_number=account_number,
+                status="PENDING",
+            )
+
+            SystemTransactionLog.objects.create(
+                user_profile=profile,
+                amount=-amount,
+                log_type="WITHDRAWAL",
+                reference_id=f"REQ_{withdrawal.id}",
+            )
+
+            print(
+                f"💸 WITHDRAWAL REQUEST | "
+                f"device={device_token} | "
+                f"amount={amount} | "
+                f"new_balance={profile.coins}"
+            )
 
         return JsonResponse({
-            "status":
-                "success",
-
-            "message":
-                (
-                    "Withdrawal request logged "
-                    "successfully!"
-                ),
+            "status": "success",
+            "message": (
+                "Withdrawal request submitted. "
+                "Coins deducted from wallet."
+            ),
+            "new_balance": profile.coins,
         })
 
     except (
@@ -127,10 +222,7 @@ def submit_withdrawal_request(request):
     ):
 
         return JsonResponse(
-            {
-                "error":
-                    "Invalid request payload."
-            },
+            {"error": "Invalid request payload."},
             status=400,
         )
 
@@ -175,11 +267,10 @@ def custom_withdrawal_dashboard(request):
             "current_balance":
                 profile.coins,
 
+            # Coins already deducted at request time
+            # so this is just informational
             "has_enough":
-                (
-                    profile.coins
-                    >= withdrawal.amount
-                ),
+                True,
         })
 
     context = {
@@ -208,7 +299,10 @@ def custom_withdrawal_dashboard(request):
 
 
 # ==========================================
-# APPROVE WITHDRAWAL (staff only)
+# APPROVE WITHDRAWAL
+#
+# Coins were already deducted at request time.
+# Just change status to APPROVED.
 # ==========================================
 
 @staff_member_required
@@ -262,7 +356,9 @@ def approve_withdrawal_custom(
 
 
 # ==========================================
-# REJECT WITHDRAWAL (staff only)
+# REJECT WITHDRAWAL
+#
+# Coins are REFUNDED back to the user's wallet.
 # ==========================================
 
 @staff_member_required
@@ -271,17 +367,52 @@ def reject_withdrawal_custom(
     withdraw_id,
 ):
 
-    withdrawal = get_object_or_404(
-        WithdrawalRequest,
-        id=withdraw_id,
-        status="PENDING",
-    )
+    with transaction.atomic():
 
-    withdrawal.status = "REJECTED"
+        withdrawal = get_object_or_404(
+            WithdrawalRequest,
+            id=withdraw_id,
+            status="PENDING",
+        )
 
-    withdrawal.save(
-        update_fields=["status"]
-    )
+        # ----------------------------------------------
+        # Refund coins to user
+        # ----------------------------------------------
+
+        profile = (
+            UserProfileBalance.objects
+            .select_for_update()
+            .filter(
+                device_token=withdrawal.device_token
+            )
+            .first()
+        )
+
+        if profile:
+
+            profile.coins += withdrawal.amount
+            profile.save(update_fields=["coins"])
+
+            # ------------------------------------------
+            # Refund ledger
+            # ------------------------------------------
+
+            SystemTransactionLog.objects.create(
+                user_profile=profile,
+                amount=withdrawal.amount,
+                log_type="WAGER_REFUND",
+                reference_id=f"WD_REJECT_{withdrawal.id}",
+            )
+
+            print(
+                f"↩️ WITHDRAWAL REJECTED | "
+                f"device={withdrawal.device_token} | "
+                f"amount={withdrawal.amount} | "
+                f"refunded_to={profile.coins}"
+            )
+
+        withdrawal.status = "REJECTED"
+        withdrawal.save(update_fields=["status"])
 
     if (
         request.headers.get(
@@ -290,16 +421,21 @@ def reject_withdrawal_custom(
     ):
 
         return JsonResponse({
-            "status":
-                "success",
-
-            "message":
-                "Withdrawal request cancelled.",
+            "status": "success",
+            "message": (
+                "Withdrawal rejected. "
+                "Coins refunded to user."
+            ),
+            "refunded_amount": withdrawal.amount,
         })
 
     messages.warning(
         request,
-        "Withdrawal request rejected.",
+        (
+            f"Withdrawal rejected. "
+            f"{withdrawal.amount} coins refunded "
+            f"to {withdrawal.device_token}."
+        ),
     )
 
     return redirect(

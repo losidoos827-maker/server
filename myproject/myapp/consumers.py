@@ -1,6 +1,7 @@
 import json
 import random
 import asyncio
+import time
 
 from urllib.parse import parse_qs
 
@@ -24,21 +25,49 @@ ACTIVE_GAMES = {}
 
 # ==========================================================
 # PENDING AUTO-SURRENDER TASKS
-#
-# Key:   "{game_id}:{player_token}"
-# Value: asyncio.Task
 # ==========================================================
 
 PENDING_SURRENDER_TASKS = {}
 
 
 # ==========================================================
-# AUTO-SURRENDER GRACE PERIOD
+# PENDING TURN TIMER TASKS
 #
-# Player disconnects → wait 30s → if not back, surrender.
+# Key:   game_id
+# Value: asyncio.Task
+# ==========================================================
+
+PENDING_TURN_TIMERS = {}
+
+
+# ==========================================================
+# LAST SCHEDULED TURN INDEX
+#
+# Key:   game_id
+# Value: turn_index (int)
+#
+# Prevents resetting the timer on every broadcast.
+# Only resets when the actual turn changes.
+# ==========================================================
+
+LAST_SCHEDULED_TURN = {}
+
+
+# ==========================================================
+# AUTO-SURRENDER GRACE PERIOD
 # ==========================================================
 
 AUTO_SURRENDER_GRACE_SECONDS = 30
+
+
+# ==========================================================
+# TURN TIMEOUT
+#
+# Each player gets 40 seconds to make a move.
+# If they don't, turn auto-advances to next player.
+# ==========================================================
+
+TURN_TIMEOUT_SECONDS = 40
 
 
 # ==========================================================
@@ -91,7 +120,227 @@ def get_global_cell_index(
 
 
 # ==========================================================
-# DB HELPERS (module-level, usable from tasks)
+# REMOVE PLAYER FROM ACTIVE STATE
+# ==========================================================
+
+def _remove_player_from_state(
+    state,
+    leaver_token,
+):
+
+    leaver_color = state[
+        "player_assignments"
+    ].pop(leaver_token, None)
+
+    state.get("player_names", {}).pop(
+        leaver_token,
+        None,
+    )
+
+    if leaver_color:
+
+        for token in state["tokens"]:
+
+            if token["color"] == leaver_color:
+
+                token["position"] = -1
+
+    return leaver_color, list(
+        state["player_assignments"].items()
+    )
+
+
+# ==========================================================
+# CANCEL TURN TIMER
+# ==========================================================
+
+def _cancel_turn_timer(game_id):
+
+    task = PENDING_TURN_TIMERS.pop(
+        str(game_id), None
+    )
+
+    if task:
+
+        task.cancel()
+
+
+# ==========================================================
+# SCHEDULE TURN TIMER
+#
+# Called whenever the game state might have changed.
+# Only schedules a fresh timer if the turn index
+# actually changed (or no timer exists yet).
+# ==========================================================
+
+def _schedule_turn_timer(
+    game_id,
+    channel_layer,
+):
+
+    game_key = str(game_id)
+
+    state = ACTIVE_GAMES.get(game_key)
+
+    if not state:
+
+        return
+
+    # ----------------------------------------------
+    # Only schedule if game is ACTIVE
+    # ----------------------------------------------
+
+    if state.get("game_status") != "ACTIVE":
+
+        state["turn_deadline"] = 0
+
+        _cancel_turn_timer(game_key)
+
+        LAST_SCHEDULED_TURN.pop(game_key, None)
+
+        return
+
+    current_turn_index = state.get(
+        "turn_index", 0
+    )
+
+    # ----------------------------------------------
+    # Skip if we already have a timer for this turn
+    # ----------------------------------------------
+
+    if (
+        LAST_SCHEDULED_TURN.get(game_key)
+        == current_turn_index
+        and game_key in PENDING_TURN_TIMERS
+    ):
+
+        return
+
+    # ----------------------------------------------
+    # Cancel old and start fresh
+    # ----------------------------------------------
+
+    _cancel_turn_timer(game_key)
+
+    LAST_SCHEDULED_TURN[
+        game_key
+    ] = current_turn_index
+
+    state["turn_deadline"] = (
+        time.time() + TURN_TIMEOUT_SECONDS
+    )
+
+    task = asyncio.create_task(
+        _auto_advance_turn(
+            game_key,
+            current_turn_index,
+            channel_layer,
+        )
+    )
+
+    PENDING_TURN_TIMERS[
+        game_key
+    ] = task
+
+
+# ==========================================================
+# AUTO-ADVANCE TURN ON TIMEOUT
+# ==========================================================
+
+async def _auto_advance_turn(
+    game_id,
+    expected_turn_index,
+    channel_layer,
+):
+
+    try:
+
+        await asyncio.sleep(
+            TURN_TIMEOUT_SECONDS
+        )
+
+    except asyncio.CancelledError:
+
+        return
+
+    state = ACTIVE_GAMES.get(game_id)
+
+    if not state:
+
+        return
+
+    if state.get("game_status") != "ACTIVE":
+
+        return
+
+    # ----------------------------------------------
+    # Verify turn hasn't already changed
+    # ----------------------------------------------
+
+    if (
+        state.get("turn_index")
+        != expected_turn_index
+    ):
+
+        return
+
+    order = state.get(
+        "player_turn_order", []
+    )
+
+    if not order:
+
+        return
+
+    # ----------------------------------------------
+    # ⏰ Time out! Advance to next player
+    # ----------------------------------------------
+
+    state["has_rolled"] = False
+
+    state["turn_index"] = (
+        state["turn_index"] + 1
+    ) % len(order)
+
+    next_color = order[state["turn_index"]]
+
+    state["status_text"] = (
+        f"⏰ Time out! "
+        f"{next_color}'s Turn"
+    )
+
+    print(
+        f"⏰ TURN TIMEOUT | "
+        f"Game={game_id} | "
+        f"Next={next_color}"
+    )
+
+    # ----------------------------------------------
+    # Reset scheduler so next turn gets fresh timer
+    # ----------------------------------------------
+
+    LAST_SCHEDULED_TURN.pop(game_id, None)
+
+    _schedule_turn_timer(game_id, channel_layer)
+
+    # ----------------------------------------------
+    # Broadcast
+    # ----------------------------------------------
+
+    await channel_layer.group_send(
+        f"ludo_match_{game_id}",
+        {
+            "type":
+                "send_state_payload",
+
+            "payload":
+                state,
+        },
+    )
+
+
+# ==========================================================
+# DB HELPERS
 # ==========================================================
 
 @database_sync_to_async
@@ -151,12 +400,6 @@ def _ensure_game_room_exists(
 
 # ==========================================================
 # AUTO-SURRENDER TASK
-#
-# Runs 30s after a player disconnects. If the player hasn't
-# reconnected by then, this function:
-#
-#   - If game is ACTIVE  → opponent wins + payout
-#   - If game is LOBBY   → cancel + refund
 # ==========================================================
 
 async def _auto_surrender_task(
@@ -246,29 +489,16 @@ async def _auto_surrender_task(
         return
 
     # ==================================================
-    # ACTIVE — opponent wins
+    # ACTIVE — handle 2P and 4P
     # ==================================================
 
     if status == "ACTIVE":
 
-        opponent_color = None
-        opponent_token = None
-
-        for token, color in assignments.items():
-
-            if token != leaver_token:
-
-                opponent_color = color
-                opponent_token = token
-
-                break
-
-        if not opponent_color:
-
-            return
-
-        leaver_color = assignments.get(
-            leaver_token
+        leaver_color, remaining = (
+            _remove_player_from_state(
+                state,
+                leaver_token,
+            )
         )
 
         print(
@@ -276,96 +506,147 @@ async def _auto_surrender_task(
             f"Game={game_id} | "
             f"Leaver={leaver_token} "
             f"({leaver_color}) | "
-            f"Winner={opponent_token} "
-            f"({opponent_color})"
+            f"Remaining={len(remaining)}"
         )
 
+        # Nobody left → cancel + refund
+        if len(remaining) == 0:
+
+            await database_sync_to_async(
+                cancel_wager
+            )(game_id)
+
+            state["game_status"] = "CANCELLED"
+
+            state["status_text"] = (
+                "All players disconnected. "
+                "Game cancelled."
+            )
+
+            ACTIVE_GAMES.pop(game_id, None)
+
+            _cancel_turn_timer(game_id)
+
+            await channel_layer.group_send(
+                f"ludo_match_{game_id}",
+                {
+                    "type":
+                        "send_state_payload",
+
+                    "payload":
+                        state,
+                },
+            )
+
+            return
+
+        # Exactly 1 left → winner
+        if len(remaining) == 1:
+
+            winner_token, winner_color = (
+                remaining[0]
+            )
+
+            state["status_text"] = (
+                f"{leaver_color} disconnected! "
+                f"{winner_color} wins."
+            )
+
+            await _ensure_game_room_exists(
+                game_id,
+                state,
+            )
+
+            result = await database_sync_to_async(
+                finalize_wager_game
+            )(
+                game_id=game_id,
+                winning_device_token=(
+                    winner_token
+                ),
+            )
+
+            if (
+                not isinstance(result, dict)
+                or result.get("status") != "success"
+            ):
+
+                error_message = (
+                    result.get(
+                        "message",
+                        "Unknown",
+                    )
+                    if isinstance(result, dict)
+                    else "Invalid response"
+                )
+
+                state["game_status"] = "PAYOUT_ERROR"
+
+                state["status_text"] = (
+                    f"Payout failed: {error_message}"
+                )
+
+            else:
+
+                state["winner"] = winner_color
+
+                state[
+                    "winner_device_token"
+                ] = winner_token
+
+                state["game_status"] = "COMPLETED"
+
+                state["winner_payout"] = int(
+                    result.get(
+                        "winner_payout",
+                        0,
+                    )
+                )
+
+                state["platform_fee"] = int(
+                    result.get(
+                        "service_fee",
+                        0,
+                    )
+                )
+
+                state["total_pool"] = int(
+                    result.get(
+                        "total_pool",
+                        0,
+                    )
+                )
+
+                state["status_text"] = (
+                    f"{winner_color} WON! "
+                    f"{state['winner_payout']} "
+                    f"coins awarded."
+                )
+
+            _cancel_turn_timer(game_id)
+
+            await channel_layer.group_send(
+                f"ludo_match_{game_id}",
+                {
+                    "type":
+                        "send_state_payload",
+
+                    "payload":
+                        state,
+                },
+            )
+
+            return
+
+        # 2+ players remain (4P) → continue
         state["status_text"] = (
-            f"{leaver_color} disconnected! "
-            f"{opponent_color} wins."
+            f"{leaver_color} disconnected. "
+            f"Game continues."
         )
 
-        await _ensure_game_room_exists(
-            game_id,
-            state,
-        )
+        LAST_SCHEDULED_TURN.pop(game_id, None)
 
-        result = await database_sync_to_async(
-            finalize_wager_game
-        )(
-            game_id=game_id,
-            winning_device_token=(
-                opponent_token
-            ),
-        )
-
-        if (
-            not isinstance(result, dict)
-            or result.get("status") != "success"
-        ):
-
-            error_message = (
-                result.get(
-                    "message",
-                    "Unknown",
-                )
-                if isinstance(result, dict)
-                else "Invalid response"
-            )
-
-            state["game_status"] = "PAYOUT_ERROR"
-
-            state["status_text"] = (
-                f"Payout failed: {error_message}"
-            )
-
-            print(
-                f"❌ AUTO-PAYOUT FAILED | "
-                f"{error_message}"
-            )
-
-        else:
-
-            state["winner"] = opponent_color
-
-            state[
-                "winner_device_token"
-            ] = opponent_token
-
-            state["game_status"] = "COMPLETED"
-
-            state["winner_payout"] = int(
-                result.get(
-                    "winner_payout",
-                    0,
-                )
-            )
-
-            state["platform_fee"] = int(
-                result.get(
-                    "service_fee",
-                    0,
-                )
-            )
-
-            state["total_pool"] = int(
-                result.get(
-                    "total_pool",
-                    0,
-                )
-            )
-
-            state["status_text"] = (
-                f"{opponent_color} WON! "
-                f"{state['winner_payout']} "
-                f"coins awarded."
-            )
-
-            print(
-                f"🏆 AUTO-PAYOUT DONE | "
-                f"Winner={opponent_color} | "
-                f"Payout={state['winner_payout']}"
-            )
+        _schedule_turn_timer(game_id, channel_layer)
 
         await channel_layer.group_send(
             f"ludo_match_{game_id}",
@@ -403,10 +684,6 @@ class LudoGameConsumer(
             f"ludo_match_{self.game_id}"
         )
 
-        # ----------------------------------------------
-        # Read player token
-        # ----------------------------------------------
-
         query_string = (
             self.scope
             .get(
@@ -430,10 +707,6 @@ class LudoGameConsumer(
             if token_list
             else None
         )
-
-        # ----------------------------------------------
-        # Authenticate
-        # ----------------------------------------------
 
         if not self.player_token:
 
@@ -478,11 +751,6 @@ class LudoGameConsumer(
 
             return
 
-        # ----------------------------------------------
-        # Cancel any pending auto-surrender for this
-        # player (they reconnected in time).
-        # ----------------------------------------------
-
         task_key = (
             f"{self.game_id}:"
             f"{self.player_token}"
@@ -503,10 +771,6 @@ class LudoGameConsumer(
                 f"Game={self.game_id} | "
                 f"Player={self.player_token}"
             )
-
-        # ----------------------------------------------
-        # Join group
-        # ----------------------------------------------
 
         await self.channel_layer.group_add(
             self.room_group_name,
@@ -580,10 +844,6 @@ class LudoGameConsumer(
             f"Game={self.game_id} | "
             f"Player={self.player_token}"
         )
-
-        # ----------------------------------------------
-        # Schedule auto-surrender if game is ongoing
-        # ----------------------------------------------
 
         if not self.player_token:
 
@@ -997,15 +1257,13 @@ class LudoGameConsumer(
             f"coins awarded."
         )
 
+        _cancel_turn_timer(self.game_id)
+
         print(
             f"🏆 GAME WON | "
             f"Game={self.game_id} | "
             f"Winner={winning_color} | "
-            f"Device="
-            f"{winning_device_token} | "
-            f"Payout="
-            f"{state['winner_payout']} | "
-            f"Fee={state['platform_fee']}"
+            f"Payout={state['winner_payout']}"
         )
 
     # ======================================================
@@ -1027,24 +1285,27 @@ class LudoGameConsumer(
 
         if current_status == "ACTIVE":
 
-            opponent_color = None
-            opponent_token = None
+            leaver_color, remaining = (
+                _remove_player_from_state(
+                    state,
+                    self.player_token,
+                )
+            )
 
-            for (
-                token,
-                color
-            ) in state[
-                "player_assignments"
-            ].items():
+            print(
+                f"🏳️ SURRENDER | "
+                f"Game={self.game_id} | "
+                f"Leaver={self.player_token} "
+                f"({leaver_color}) | "
+                f"Remaining={len(remaining)}"
+            )
 
-                if token != self.player_token:
+            # Nobody left → cancel + refund
+            if len(remaining) == 0:
 
-                    opponent_color = color
-                    opponent_token = token
-
-                    break
-
-            if not opponent_color:
+                await database_sync_to_async(
+                    cancel_wager
+                )(self.game_id)
 
                 state[
                     "game_status"
@@ -1053,39 +1314,62 @@ class LudoGameConsumer(
                 state[
                     "status_text"
                 ] = (
-                    "Player left before "
-                    "game started."
+                    "All players left. "
+                    "Game cancelled."
+                )
+
+                ACTIVE_GAMES.pop(
+                    self.game_id,
+                    None,
+                )
+
+                _cancel_turn_timer(self.game_id)
+
+                await self.broadcast_current_state()
+
+                return
+
+            # Exactly 1 left → winner
+            if len(remaining) == 1:
+
+                winner_token, winner_color = (
+                    remaining[0]
+                )
+
+                state[
+                    "status_text"
+                ] = (
+                    f"{leaver_color} surrendered! "
+                    f"{winner_color} wins."
+                )
+
+                await self.handle_game_winner(
+                    state,
+                    winner_color
                 )
 
                 await self.broadcast_current_state()
 
                 return
 
-            leaver_color = (
-                state[
-                    "player_assignments"
-                ].get(self.player_token)
-            )
-
+            # 2+ left (4P) → continue
             state[
                 "status_text"
             ] = (
-                f"{leaver_color} surrendered! "
-                f"{opponent_color} wins."
+                f"{leaver_color} surrendered. "
+                f"Game continues."
             )
 
-            print(
-                f"🏳️ SURRENDER | "
-                f"Game={self.game_id} | "
-                f"Leaver={self.player_token} "
-                f"({leaver_color}) | "
-                f"Winner={opponent_token} "
-                f"({opponent_color})"
-            )
+            self.normalize_turn_order(state)
 
-            await self.handle_game_winner(
-                state,
-                opponent_color
+            if not state["player_turn_order"]:
+
+                state["game_status"] = "CANCELLED"
+
+            # Turn may have changed — reset scheduler
+            LAST_SCHEDULED_TURN.pop(
+                self.game_id,
+                None,
             )
 
             await self.broadcast_current_state()
@@ -1098,19 +1382,33 @@ class LudoGameConsumer(
 
         if current_status == "LOBBY":
 
+            await database_sync_to_async(
+                cancel_wager
+            )(self.game_id)
+
             state[
                 "game_status"
             ] = "CANCELLED"
 
             state[
                 "status_text"
-            ] = "Player cancelled the match."
+            ] = (
+                "Match cancelled. "
+                "Coins refunded."
+            )
 
             print(
-                f"🚪 LOBBY CANCELLED | "
+                f"🚪 LOBBY CANCELLED + REFUND | "
                 f"Game={self.game_id} | "
                 f"Player={self.player_token}"
             )
+
+            ACTIVE_GAMES.pop(
+                self.game_id,
+                None,
+            )
+
+            _cancel_turn_timer(self.game_id)
 
             await self.broadcast_current_state()
 
@@ -1304,6 +1602,12 @@ class LudoGameConsumer(
                 f"{current_player} rolled "
                 f"{roll} (No Moves)! "
                 f"Pass to {next_player}."
+            )
+
+            # Turn changed — reset scheduler
+            LAST_SCHEDULED_TURN.pop(
+                self.game_id,
+                None,
             )
 
         else:
@@ -1562,6 +1866,12 @@ class LudoGameConsumer(
                 f"Tap the dice to roll."
             )
 
+            # Turn changed — reset scheduler
+            LAST_SCHEDULED_TURN.pop(
+                self.game_id,
+                None,
+            )
+
         else:
 
             state[
@@ -1588,6 +1898,16 @@ class LudoGameConsumer(
             return
 
         self.normalize_turn_order(state)
+
+        # ----------------------------------------------
+        # Schedule / refresh turn timer
+        # (also sets turn_deadline for the client)
+        # ----------------------------------------------
+
+        _schedule_turn_timer(
+            self.game_id,
+            self.channel_layer,
+        )
 
         await self.channel_layer.group_send(
             self.room_group_name,
