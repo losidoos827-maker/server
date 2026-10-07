@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Analytics — Rocks Games</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', sans-serif;
+            background: #F5F7FA;
+            color: #1A202C;
+        }
+        .top-bar {
+            background: linear-gradient(90deg, #0D47A1 0%, #1976D2 100%);
+            color: white;
+            padding: 18px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 15px rgba(13,71,161,0.3);
+        }
+        .top-bar h1 { margin: 0; font-size: 1.5rem; font-weight: 700; }
+        .top-bar a {
+            color: white;
+            text-decoration: none;
+            background: rgba(255,255,255,0.15);
+            padding: 8px 16px;
+            border-radius: 8px;
+            margin-left: 10px;
+            font-weight: 600;
+            transition: 0.2s;
+        }
+        .top-bar a:hover { background: rgba(255,255,255,0.25); }
+        .period-tabs {
+            display: flex;
+            gap: 8px;
+            margin: 24px 0 20px;
+        }
+        .period-tabs a {
+            padding: 8px 20px;
+            border-radius: 8px;
+            background: white;
+            color: #1565C0;
+            text-decoration: none;
+            font-weight: 600;
+            border: 1.5px solid #E0E4EA;
+            transition: 0.2s;
+        }
+        .period-tabs a.active {
+            background: linear-gradient(90deg, #0D47A1 0%, #1976D2 100%);
+            color: white;
+            border-color: #0D47A1;
+        }
+        .period-tabs a:hover {
+            border-color: #1976D2;
+        }
+        .container-main {
+            max-width: 1400px;
+            margin: 0 auto 40px;
+            padding: 0 20px;
+        }
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        @media (max-width: 900px) { .summary-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 500px) { .summary-grid { grid-template-columns: 1fr; } }
+        .stat-card {
+            background: white;
+            border-radius: 14px;
+            padding: 22px;
+            border: 1.5px solid #E0E4EA;
+            box-shadow: 0 2px 10px rgba(13,71,161,0.06);
+            transition: 0.2s;
+        }
+        .stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(13,71,161,0.15);
+        }
+        .stat-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            margin-bottom: 14px;
+        }
+        .stat-icon.in { background: #E8F5E9; color: #2E7D32; }
+        .stat-icon.out { background: #FFEBEE; color: #C62828; }
+        .stat-icon.earning { background: #FFF3E0; color: #E65100; }
+        .stat-icon.net { background: #E3F2FD; color: #0D47A1; }
+        .stat-label {
+            font-size: 0.8rem;
+            color: #6B7280;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 800;
+            color: #1A202C;
+        }
+        .stat-value.positive { color: #2E7D32; }
+        .stat-value.negative { color: #C62828; }
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 30px;
+        }
+        @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+        .panel {
+            background: white;
+            border: 1.5px solid #E0E4EA;
+            border-radius: 14px;
+            box-shadow: 0 2px 10px rgba(13,71,161,0.08);
+            overflow: hidden;
+        }
+        .panel-header {
+            background: linear-gradient(90deg, #0D47A1 0%, #1976D2 100%);
+            color: white;
+            padding: 16px 22px;
+            font-weight: 700;
+            font-size: 1.05rem;
+        }
+        .panel-body { padding: 20px 22px; }
+        .breakdown-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #E0E4EA;
+        }
+        .breakdown-row:last-child { border-bottom: none; }
+        .breakdown-label { color: #4B5563; font-size: 0.9rem; }
+        .breakdown-value { font-weight: 700; color: #1A202C; }
+        .table-trans {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .table-trans th {
+            background: #E3F2FD;
+            color: #0D47A1;
+            padding: 12px;
+            text-align: left;
+            font-weight: 700;
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .table-trans td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #E0E4EA;
+            font-size: 0.85rem;
+        }
+        .amount-pos { color: #2E7D32; font-weight: 700; }
+        .amount-neg { color: #C62828; font-weight: 700; }
+        .badge-type {
+            padding: 3px 8px;
+            border-radius: 5px;
+            font-weight: 700;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+        .badge-deposit { background: #E8F5E9; color: #2E7D32; }
+        .badge-withdrawal { background: #FFEBEE; color: #C62828; }
+        .badge-wager { background: #E3F2FD; color: #0D47A1; }
+        .badge-spin { background: #FFF3E0; color: #E65100; }
+        .badge-referral { background: #F3E5F5; color: #6A1B9A; }
+        .badge-other { background: #ECEFF1; color: #455A64; }
+    </style>
+</head>
+<body>
+
+<div class="top-bar">
+    <h1>📊 Analytics — {{ period_label }}</h1>
+    <div>
+        <a href="/management/"><i class="fas fa-home"></i> Portal</a>
+        <a href="/management/dashboard/rewards/"><i class="fas fa-trophy"></i> Rewards</a>
+    </div>
+</div>
+
+<div class="container-main">
+
+    <div class="period-tabs">
+        <a href="?period=24h" class="{% if period == '24h' %}active{% endif %}">
+            Last 24 Hours
+        </a>
+        <a href="?period=7d" class="{% if period == '7d' %}active{% endif %}">
+            Last 7 Days
+        </a>
+        <a href="?period=30d" class="{% if period == '30d' %}active{% endif %}">
+            Last 30 Days
+        </a>
+    </div>
+
+    <p style="color:#6B7280; font-size:0.85rem;">
+        Showing data from <strong>{{ since }}</strong> to <strong>{{ now }}</strong>
+    </p>
+
+    <!-- ============================================== -->
+    <!-- SUMMARY CARDS -->
+    <!-- ============================================== -->
+
+    <div class="summary-grid">
+
+        <div class="stat-card">
+            <div class="stat-icon in"><i class="fas fa-arrow-down"></i></div>
+            <div class="stat-label">Total In</div>
+            <div class="stat-value positive">+{{ summary.total_in }}</div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon out"><i class="fas fa-arrow-up"></i></div>
+            <div class="stat-label">Total Out</div>
+            <div class="stat-value negative">-{{ summary.total_out }}</div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon earning"><i class="fas fa-coins"></i></div>
+            <div class="stat-label">Platform Earnings</div>
+            <div class="stat-value">{{ summary.platform_earnings }}</div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon net"><i class="fas fa-chart-line"></i></div>
+            <div class="stat-label">Net Flow</div>
+            <div class="stat-value {% if summary.net_flow >= 0 %}positive{% else %}negative{% endif %}">
+                {{ summary.net_flow }}
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ============================================== -->
+    <!-- DETAILED BREAKDOWN -->
+    <!-- ============================================== -->
+
+    <div class="grid-2">
+
+        <div class="panel">
+            <div class="panel-header">
+                💰 Platform Revenue Breakdown
+            </div>
+            <div class="panel-body">
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Wager Service Fees</span>
+                    <span class="breakdown-value">{{ summary.wager_fees }}</span>
+                </div>
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Spin Paid Costs</span>
+                    <span class="breakdown-value">{{ summary.spin_costs }}</span>
+                </div>
+                <div class="breakdown-row" style="border-top:2px solid #0D47A1; margin-top:8px; padding-top:14px;">
+                    <span class="breakdown-label" style="font-weight:800; color:#0D47A1;">Total Earnings</span>
+                    <span class="breakdown-value" style="color:#1565C0; font-size:1.2rem;">
+                        {{ summary.platform_earnings }}
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-header">
+                🎮 Game Activity
+            </div>
+            <div class="panel-body">
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Games Completed</span>
+                    <span class="breakdown-value">{{ summary.games_count }}</span>
+                </div>
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Wager Volume</span>
+                    <span class="breakdown-value">{{ summary.wager_volume }}</span>
+                </div>
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Total Payouts</span>
+                    <span class="breakdown-value">{{ summary.total_payout }}</span>
+                </div>
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Refunds</span>
+                    <span class="breakdown-value">{{ summary.total_refunds }}</span>
+                </div>
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Referral Bonuses</span>
+                    <span class="breakdown-value">{{ summary.total_referral_bonus }}</span>
+                </div>
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Referral Commissions</span>
+                    <span class="breakdown-value">{{ summary.total_referral_commission }}</span>
+                </div>
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Spin Rewards</span>
+                    <span class="breakdown-value">{{ summary.total_spin_rewards }}</span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ============================================== -->
+    <!-- HOURLY BREAKDOWN (only for 24h) -->
+    <!-- ============================================== -->
+
+    {% if hourly_data %}
+    <div class="panel" style="margin-bottom:30px;">
+        <div class="panel-header">⏱️ Hourly Breakdown (Last 24 Hours)</div>
+        <div class="panel-body" style="padding:0; overflow-x:auto;">
+            <table class="table-trans">
+                <thead>
+                    <tr>
+                        <th>Hour</th>
+                        <th>In (Deposits)</th>
+                        <th>Out (Withdrawals)</th>
+                        <th>Games</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for h in hourly_data %}
+                        <tr>
+                            <td><strong>{{ h.hour }}</strong></td>
+                            <td class="amount-pos">+{{ h.in }}</td>
+                            <td class="amount-neg">-{{ h.out }}</td>
+                            <td>{{ h.games }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ============================================== -->
+    <!-- RECENT TRANSACTIONS -->
+    <!-- ============================================== -->
+
+    <div class="panel">
+        <div class="panel-header">📜 Recent Transactions (Last 30)</div>
+        <div class="panel-body" style="padding:0; overflow-x:auto;">
+            <table class="table-trans">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>User</th>
+                        <th>Amount</th>
+                        <th>Reference</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for t in recent_transactions %}
+                        <tr>
+                            <td>
+                                {% if "DEPOSIT" in t.log_type %}
+                                    <span class="badge-type badge-deposit">{{ t.log_type }}</span>
+                                {% elif "WITHDRAWAL" in t.log_type %}
+                                    <span class="badge-type badge-withdrawal">{{ t.log_type }}</span>
+                                {% elif "WAGER" in t.log_type %}
+                                    <span class="badge-type badge-wager">{{ t.log_type }}</span>
+                                {% elif "SPIN" in t.log_type %}
+                                    <span class="badge-type badge-spin">{{ t.log_type }}</span>
+                                {% elif "REFERRAL" in t.log_type %}
+                                    <span class="badge-type badge-referral">{{ t.log_type }}</span>
+                                {% else %}
+                                    <span class="badge-type badge-other">{{ t.log_type }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <strong>{{ t.nickname }}</strong>
+                                <div style="font-size:0.7rem; color:#9CA3AF;">
+                                    {{ t.device_token|slice:":20" }}...
+                                </div>
+                            </td>
+                            <td class="{% if t.amount >= 0 %}amount-pos{% else %}amount-neg{% endif %}">
+                                {% if t.amount >= 0 %}+{% endif %}{{ t.amount }}
+                            </td>
+                            <td style="color:#6B7280; font-size:0.75rem;">
+                                {{ t.reference_id|default:"—" }}
+                            </td>
+                            <td style="color:#6B7280;">{{ t.time }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="5" style="text-align:center; padding:30px; color:#9CA3AF;">
+                                No transactions in this period.
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+
+</body>
+</html>

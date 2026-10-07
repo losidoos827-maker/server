@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.urls import path
 from django.shortcuts import redirect
 from django.contrib import messages
+from django.db import transaction
 
 from .models import (
     SystemPaymentMethod,
@@ -9,6 +10,8 @@ from .models import (
     UserProfileBalance,
     WithdrawalRequest,
     SystemSetting,
+    ReferralSystem,
+    SystemTransactionLog,
 )
 
 
@@ -47,24 +50,152 @@ class DepositRequestAdmin(admin.ModelAdmin):
 
         count = 0
 
+        total_referrer_rewards = 0
+
         for deposit in queryset.filter(status='PENDING'):
 
-            profile, _ = UserProfileBalance.objects.get_or_create(
-                device_token=deposit.device_token
+            with transaction.atomic():
+
+                profile, _ = (
+                    UserProfileBalance.objects
+                    .select_for_update()
+                    .get_or_create(
+                        device_token=deposit.device_token
+                    )
+                )
+
+                is_first = (
+                    not profile.has_made_first_deposit
+                )
+
+                profile.coins += deposit.amount
+
+                if is_first:
+
+                    profile.has_made_first_deposit = True
+
+                profile.save(
+                    update_fields=[
+                        "coins",
+                        "has_made_first_deposit",
+                    ]
+                )
+
+                SystemTransactionLog.objects.create(
+                    user_profile=profile,
+                    amount=deposit.amount,
+                    log_type="DEPOSIT",
+                    reference_id=f"DEP_{deposit.id}",
+                )
+
+                deposit.status = 'APPROVED'
+                deposit.save(update_fields=['status'])
+
+                if is_first:
+
+                    total_referrer_rewards += (
+                        self._pay_referrer_reward(
+                            profile,
+                            deposit.id,
+                        )
+                    )
+
+                count += 1
+
+        msg = (
+            f"Successfully approved {count} "
+            f"deposit receipts and updated "
+            f"player balances!"
+        )
+
+        if total_referrer_rewards > 0:
+
+            msg += (
+                f" Referrer rewards paid: "
+                f"{total_referrer_rewards} coins."
             )
 
-            profile.coins += deposit.amount
-            profile.save()
+        self.message_user(request, msg)
 
-            deposit.status = 'APPROVED'
-            deposit.save()
+    def _pay_referrer_reward(
+        self,
+        referred_profile,
+        deposit_id,
+    ):
 
-            count += 1
-
-        self.message_user(
-            request,
-            f"Successfully approved {count} deposit receipts and updated player balances!"
+        referral = (
+            ReferralSystem.objects
+            .select_for_update()
+            .select_related('referrer')
+            .filter(
+                referred_user=referred_profile,
+                referrer_reward_paid=False,
+            )
+            .first()
         )
+
+        if not referral:
+
+            return 0
+
+        if not referral.referrer:
+
+            return 0
+
+        reward = int(
+            referral.referrer_reward_amount or 50
+        )
+
+        if reward <= 0:
+
+            return 0
+
+        referrer = (
+            UserProfileBalance.objects
+            .select_for_update()
+            .filter(id=referral.referrer.id)
+            .first()
+        )
+
+        if not referrer:
+
+            return 0
+
+        referrer.coins += reward
+
+        referrer.save(update_fields=["coins"])
+
+        referral.referrer_reward_paid = True
+
+        referral.total_commission_earned = (
+            referral.total_commission_earned
+            + reward
+        )
+
+        referral.save(
+            update_fields=[
+                "referrer_reward_paid",
+                "total_commission_earned",
+            ]
+        )
+
+        SystemTransactionLog.objects.create(
+            user_profile=referrer,
+            amount=reward,
+            log_type="REFERRAL_INVITE_REWARD",
+            reference_id=(
+                f"FIRST_DEP_{referred_profile.id}"
+                f"_DEP_{deposit_id}"
+            ),
+        )
+
+        print(
+            f"💰 REFERRER REWARD PAID (admin) | "
+            f"referrer={referrer.device_token} | "
+            f"amount={reward}"
+        )
+
+        return reward
 
     def reject_deposits(self, request, queryset):
 
@@ -166,50 +297,92 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
 
     def approve_request(self, request, object_id):
 
-        obj = WithdrawalRequest.objects.get(pk=object_id)
+        with transaction.atomic():
 
-        if obj.status == 'PENDING':
-
-            profile, _ = UserProfileBalance.objects.get_or_create(
-                device_token=obj.device_token
+            obj = (
+                WithdrawalRequest.objects
+                .select_for_update()
+                .get(pk=object_id)
             )
 
-            if profile.coins >= obj.amount:
-
-                profile.coins -= obj.amount
-                profile.save()
-
-                obj.status = 'APPROVED'
-                obj.save()
+            if obj.status != 'PENDING':
 
                 self.message_user(
                     request,
-                    "Withdrawal approved successfully!",
-                    messages.SUCCESS
+                    "Already processed.",
+                    messages.WARNING
                 )
 
-            else:
+                return redirect(f'../../')
 
-                self.message_user(
-                    request,
-                    "Error: User does not have sufficient balance!",
-                    messages.ERROR
-                )
+            # Coins are ALREADY deducted at request time.
+            # Do NOT deduct again. Just mark APPROVED.
+            obj.status = 'APPROVED'
+
+            obj.save(update_fields=['status'])
+
+            self.message_user(
+                request,
+                "Withdrawal approved successfully!",
+                messages.SUCCESS
+            )
 
         return redirect(f'../../')
 
     def reject_request(self, request, object_id):
 
-        obj = WithdrawalRequest.objects.get(pk=object_id)
+        with transaction.atomic():
 
-        if obj.status == 'PENDING':
+            obj = (
+                WithdrawalRequest.objects
+                .select_for_update()
+                .get(pk=object_id)
+            )
+
+            if obj.status != 'PENDING':
+
+                self.message_user(
+                    request,
+                    "Already processed.",
+                    messages.WARNING
+                )
+
+                return redirect(f'../../')
+
+            # Coins were deducted at request time.
+            # Refund them back on rejection.
+            profile = (
+                UserProfileBalance.objects
+                .select_for_update()
+                .filter(
+                    device_token=obj.device_token
+                )
+                .first()
+            )
+
+            if profile:
+
+                profile.coins += obj.amount
+
+                profile.save(update_fields=['coins'])
+
+                SystemTransactionLog.objects.create(
+                    user_profile=profile,
+                    amount=obj.amount,
+                    log_type="WAGER_REFUND",
+                    reference_id=f"WD_REJECT_{obj.id}",
+                )
 
             obj.status = 'REJECTED'
-            obj.save()
+
+            obj.save(update_fields=['status'])
 
             self.message_user(
                 request,
-                "Withdrawal request rejected.",
+                (
+                    f"Withdrawal rejected. "
+                    f"{obj.amount} coins refunded."
+                ),
                 messages.WARNING
             )
 

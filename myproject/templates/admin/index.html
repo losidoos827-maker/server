@@ -1,0 +1,219 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static jazzmin %}
+{% get_jazzmin_settings request as jazzmin_settings %}
+
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+
+    /* ==========================================================
+       CUSTOM PORTAL CARDS ON DJANGO ADMIN HOMEPAGE
+       ========================================================== */
+
+    .section-label {
+        color: #1F2937;
+        font-size: 0.85rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
+        margin: 10px 0 18px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid #E5E7EB;
+    }
+
+    .portal-cards {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+
+    @media (max-width: 1200px) {
+        .portal-cards { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 600px) {
+        .portal-cards { grid-template-columns: 1fr; }
+    }
+
+    .portal-card {
+        background: #FFFFFF;
+        border: 1.5px solid #E5E7EB;
+        border-radius: 12px;
+        padding: 26px 20px;
+        text-decoration: none !important;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        transition: all 0.25s ease;
+        color: inherit;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    .portal-card:hover {
+        transform: translateY(-4px);
+        border-color: #1976D2;
+        box-shadow: 0 10px 28px rgba(25,118,210,0.16);
+    }
+
+    .portal-card .p-icon {
+        font-size: 2.6rem;
+        margin-bottom: 14px;
+        line-height: 1;
+    }
+
+    .portal-card h4 {
+        color: #111827;
+        font-size: 1.05rem;
+        font-weight: 700;
+        margin: 0 0 8px;
+    }
+
+    .portal-card p {
+        color: #6B7280;
+        font-size: 0.85rem;
+        line-height: 1.5;
+        margin: 0;
+    }
+
+</style>
+{% endblock %}
+
+
+{% block content %}
+
+<div id="content-main">
+
+    <!-- ==================================================
+         CUSTOM PORTAL CARDS
+         ================================================== -->
+
+    <div class="section-label">🎮 Management Portal</div>
+
+    <div class="portal-cards">
+
+        <a href="/management/dashboard/deposits/" class="portal-card">
+            <span class="p-icon">💰</span>
+            <h4>Deposits</h4>
+            <p>Approve or reject pending deposit requests</p>
+        </a>
+
+        <a href="/management/dashboard/withdrawals/" class="portal-card">
+            <span class="p-icon">💸</span>
+            <h4>Withdrawals</h4>
+            <p>Process user withdrawal requests</p>
+        </a>
+
+        <a href="/management/dashboard/rewards/" class="portal-card">
+            <span class="p-icon">🏆</span>
+            <h4>Leaderboard Rewards</h4>
+            <p>Distribute weekly &amp; monthly rewards</p>
+        </a>
+
+        <a href="/management/dashboard/gift/" class="portal-card">
+            <span class="p-icon">🎁</span>
+            <h4>Gift Control</h4>
+            <p>Configure daily bonus &amp; spin wheel</p>
+        </a>
+
+    </div>
+
+    <!-- ==================================================
+         STANDARD DJANGO MODEL LIST
+         ================================================== -->
+
+    <div class="section-label">⚙️ Database Models</div>
+
+    {% if app_list %}
+
+        <div class="row">
+
+            {% for app in app_list %}
+
+                <div class="col-12 col-lg-6 mb-3">
+
+                    <div class="card" style="border-radius: 10px; overflow: hidden; border: 1.5px solid #E5E7EB;">
+
+                        <div class="card-header" style="
+                            background: linear-gradient(90deg, #0D47A1 0%, #1976D2 100%);
+                            color: white;
+                            font-weight: 700;
+                            font-size: 0.95rem;
+                            padding: 12px 18px;
+                            border: none;
+                        ">
+                            {{ app.name }}
+                        </div>
+
+                        <div class="card-body p-0">
+
+                            {% for model in app.models %}
+
+                                <div style="
+                                    display: flex;
+                                    justify-content: space-between;
+                                    align-items: center;
+                                    padding: 12px 18px;
+                                    border-bottom: 1px solid #F3F4F6;
+                                    background: white;
+                                ">
+
+                                    <div>
+
+                                        {% if model.admin_url %}
+                                            <a href="{{ model.admin_url }}" style="
+                                                font-weight: 500;
+                                                color: #1F2937;
+                                                text-decoration: none;
+                                            ">
+                                                {{ model.name }}
+                                            </a>
+                                        {% else %}
+                                            <span style="color: #6B7280;">
+                                                {{ model.name }}
+                                            </span>
+                                        {% endif %}
+
+                                    </div>
+
+                                    <div>
+
+                                        {% if model.add_url %}
+                                            <a href="{{ model.add_url }}" class="btn btn-sm btn-success" style="margin-right: 4px;">
+                                                Add
+                                            </a>
+                                        {% endif %}
+
+                                        {% if model.admin_url %}
+                                            <a href="{{ model.admin_url }}" class="btn btn-sm btn-info">
+                                                Change
+                                            </a>
+                                        {% endif %}
+
+                                    </div>
+
+                                </div>
+
+                            {% endfor %}
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            {% endfor %}
+
+        </div>
+
+    {% else %}
+
+        <p>{% trans "You don't have permission to view or edit anything." %}</p>
+
+    {% endif %}
+
+</div>
+
+{% endblock %}

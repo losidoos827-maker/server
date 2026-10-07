@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Leaderboard Rewards — Rocks Games</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', sans-serif;
+            background: #F5F7FA;
+            color: #1A202C;
+        }
+        .top-bar {
+            background: linear-gradient(90deg, #0D47A1 0%, #1976D2 100%);
+            color: white;
+            padding: 18px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 15px rgba(13,71,161,0.3);
+        }
+        .top-bar h1 { margin: 0; font-size: 1.5rem; font-weight: 700; }
+        .top-bar a {
+            color: white;
+            text-decoration: none;
+            background: rgba(255,255,255,0.15);
+            padding: 8px 16px;
+            border-radius: 8px;
+            margin-left: 10px;
+            font-weight: 600;
+            transition: 0.2s;
+        }
+        .top-bar a:hover { background: rgba(255,255,255,0.25); }
+        .container-main {
+            max-width: 1400px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 30px;
+        }
+        @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+        .panel {
+            background: white;
+            border: 1.5px solid #E0E4EA;
+            border-radius: 14px;
+            box-shadow: 0 2px 10px rgba(13,71,161,0.08);
+            overflow: hidden;
+        }
+        .panel-header {
+            background: linear-gradient(90deg, #0D47A1 0%, #1976D2 100%);
+            color: white;
+            padding: 16px 22px;
+            font-weight: 700;
+            font-size: 1.05rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .panel-body { padding: 20px 22px; }
+        .period-info {
+            font-size: 0.85rem;
+            color: #6B7280;
+            margin-bottom: 14px;
+        }
+        .player-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #E0E4EA;
+        }
+        .player-row:last-child { border-bottom: none; }
+        .rank {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            margin-right: 12px;
+        }
+        .rank-1 { background: #FFD700; color: #1A202C; }
+        .rank-2 { background: #C0C0C0; color: #1A202C; }
+        .rank-3 { background: #CD7F32; color: white; }
+        .player-info { flex: 1; }
+        .player-name {
+            font-weight: 700;
+            font-size: 0.95rem;
+            color: #1A202C;
+        }
+        .player-stats {
+            font-size: 0.78rem;
+            color: #6B7280;
+        }
+        .prize {
+            color: #1565C0;
+            font-weight: 800;
+            font-size: 1rem;
+        }
+        .btn-distribute {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            margin-top: 16px;
+            background: linear-gradient(90deg, #2E7D32 0%, #4CAF50 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .btn-distribute:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(76,175,80,0.4);
+        }
+        .btn-distribute:disabled {
+            background: #BDBDBD;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        .alert-success {
+            background: #E8F5E9;
+            border-left: 4px solid #4CAF50;
+            color: #2E7D32;
+            padding: 12px 18px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .alert-warning {
+            background: #FFF3E0;
+            border-left: 4px solid #FFA726;
+            color: #E65100;
+            padding: 12px 18px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 30px;
+            color: #9CA3AF;
+        }
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .history-table th {
+            background: #E3F2FD;
+            color: #0D47A1;
+            padding: 12px;
+            text-align: left;
+            font-weight: 700;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .history-table td {
+            padding: 12px;
+            border-bottom: 1px solid #E0E4EA;
+            font-size: 0.9rem;
+        }
+        .badge-period {
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+        }
+        .badge-weekly { background: #E3F2FD; color: #0D47A1; }
+        .badge-monthly { background: #F3E5F5; color: #6A1B9A; }
+    </style>
+</head>
+<body>
+
+<div class="top-bar">
+    <h1>🏆 Leaderboard Rewards</h1>
+    <div>
+        <a href="/management/"><i class="fas fa-home"></i> Portal</a>
+        <a href="/management/dashboard/analytics/"><i class="fas fa-chart-line"></i> Analytics</a>
+    </div>
+</div>
+
+<div class="container-main">
+
+    {% if messages %}
+        {% for message in messages %}
+            {% if "error" in message.tags %}
+                <div class="alert alert-warning">{{ message }}</div>
+            {% else %}
+                <div class="alert alert-success">{{ message }}</div>
+            {% endif %}
+        {% endfor %}
+    {% endif %}
+
+    <div class="grid">
+
+        <!-- ============================================== -->
+        <!-- WEEKLY -->
+        <!-- ============================================== -->
+
+        <div class="panel">
+            <div class="panel-header">
+                <span>📅 Weekly Rewards</span>
+                <span style="font-size:0.8rem;">{{ weekly.period_key }}</span>
+            </div>
+            <div class="panel-body">
+
+                <div class="period-info">
+                    Period: {{ weekly.period_start }} → {{ weekly.period_end }}
+                </div>
+
+                {% if weekly.top_players %}
+
+                    {% for p in weekly.top_players %}
+                        <div class="player-row">
+                            <div class="rank rank-{{ p.rank }}">
+                                {{ p.rank }}
+                            </div>
+                            <div class="player-info">
+                                <div class="player-name">{{ p.name }}</div>
+                                <div class="player-stats">
+                                    {{ p.wins }} wins · {{ p.games }} games
+                                </div>
+                            </div>
+                            <div class="prize">
+                                +{{ weekly.prizes|default_if_none:0 }}
+                            </div>
+                        </div>
+                    {% endfor %}
+
+                    <div style="text-align:right; margin-top:14px; font-size:0.85rem; color:#6B7280;">
+                        Total pool:
+                        <strong style="color:#1565C0;">{{ weekly.total }} coins</strong>
+                    </div>
+
+                {% else %}
+                    <div class="empty-state">
+                        <i class="fas fa-inbox" style="font-size:2rem;"></i>
+                        <p style="margin-top:10px;">No players yet</p>
+                    </div>
+                {% endif %}
+
+                {% if weekly.already_distributed %}
+                    <button class="btn-distribute" disabled>
+                        ✅ Already Distributed
+                    </button>
+                {% else %}
+                    <form method="post" action="/management/dashboard/rewards/distribute-weekly/">
+                        {% csrf_token %}
+                        <button type="submit" class="btn-distribute" onclick="return confirm('Distribute weekly rewards now?')">
+                            🎁 Distribute Weekly Rewards
+                        </button>
+                    </form>
+                {% endif %}
+
+            </div>
+        </div>
+
+        <!-- ============================================== -->
+        <!-- MONTHLY -->
+        <!-- ============================================== -->
+
+        <div class="panel">
+            <div class="panel-header">
+                <span>🗓️ Monthly Rewards</span>
+                <span style="font-size:0.8rem;">{{ monthly.period_key }}</span>
+            </div>
+            <div class="panel-body">
+
+                <div class="period-info">
+                    Period: {{ monthly.period_start }} → {{ monthly.period_end }}
+                </div>
+
+                {% if monthly.top_players %}
+
+                    {% for p in monthly.top_players %}
+                        <div class="player-row">
+                            <div class="rank rank-{{ p.rank }}">
+                                {{ p.rank }}
+                            </div>
+                            <div class="player-info">
+                                <div class="player-name">{{ p.name }}</div>
+                                <div class="player-stats">
+                                    {{ p.wins }} wins · {{ p.games }} games
+                                </div>
+                            </div>
+                            <div class="prize">
+                                +{{ monthly.prizes|default_if_none:0 }}
+                            </div>
+                        </div>
+                    {% endfor %}
+
+                    <div style="text-align:right; margin-top:14px; font-size:0.85rem; color:#6B7280;">
+                        Total pool:
+                        <strong style="color:#1565C0;">{{ monthly.total }} coins</strong>
+                    </div>
+
+                {% else %}
+                    <div class="empty-state">
+                        <i class="fas fa-inbox" style="font-size:2rem;"></i>
+                        <p style="margin-top:10px;">No players yet</p>
+                    </div>
+                {% endif %}
+
+                {% if monthly.already_distributed %}
+                    <button class="btn-distribute" disabled>
+                        ✅ Already Distributed
+                    </button>
+                {% else %}
+                    <form method="post" action="/management/dashboard/rewards/distribute-monthly/">
+                        {% csrf_token %}
+                        <button type="submit" class="btn-distribute" onclick="return confirm('Distribute monthly rewards now?')">
+                            🎁 Distribute Monthly Rewards
+                        </button>
+                    </form>
+                {% endif %}
+
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ============================================== -->
+    <!-- HISTORY -->
+    <!-- ============================================== -->
+
+    <div class="panel">
+        <div class="panel-header">
+            <span>📜 Distribution History</span>
+        </div>
+        <div class="panel-body" style="padding:0;">
+
+            {% if history %}
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Period</th>
+                            <th>Winners</th>
+                            <th>Total Paid</th>
+                            <th>Distributed At</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for h in history %}
+                            <tr>
+                                <td>
+                                    <span class="badge-period badge-{{ h.period_type }}">
+                                        {{ h.period_type }}
+                                    </span>
+                                </td>
+                                <td><strong>{{ h.period_key }}</strong></td>
+                                <td>
+                                    {% for w in h.winners %}
+                                        <div style="font-size:0.85rem;">
+                                            #{{ w.rank }} {{ w.name }}
+                                            <span style="color:#1565C0; font-weight:700;">
+                                                (+{{ w.reward }})
+                                            </span>
+                                        </div>
+                                    {% endfor %}
+                                </td>
+                                <td><strong style="color:#1565C0;">{{ h.total_amount }}</strong> coins</td>
+                                <td style="color:#6B7280;">{{ h.distributed_at }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <div class="empty-state">
+                    <i class="fas fa-history" style="font-size:2rem;"></i>
+                    <p style="margin-top:10px;">No distributions yet</p>
+                </div>
+            {% endif %}
+
+        </div>
+    </div>
+
+</div>
+
+</body>
+</html>

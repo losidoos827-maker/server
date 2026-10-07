@@ -69,11 +69,45 @@ from .game_state import (
 
 
 # ==========================================================
+# STALE LOBBY CLEANUP HELPER
+#
+# Refunds locked coins and removes in-memory state.
+# ==========================================================
+
+def _cleanup_stale_lobby(game_id):
+
+    from ..consumers import ACTIVE_GAMES
+
+    from .wager_service import cancel_wager
+
+    try:
+
+        cancel_wager(str(game_id))
+
+    except Exception as exc:
+
+        print(
+            f"⚠️ STALE LOBBY refund failed | "
+            f"Game={game_id} | Error={exc}"
+        )
+
+    ACTIVE_GAMES.pop(str(game_id), None)
+
+    remove_game_state(str(game_id))
+
+    print(
+        f"🧹 STALE LOBBY cleaned + refunded | "
+        f"Game={game_id}"
+    )
+
+
+# ==========================================================
 # FIND WAITING ROOM
 # ==========================================================
 
 def find_waiting_room(
-    is_two_player=True
+    is_two_player=True,
+    player_token=None,
 ):
 
     from ..consumers import ACTIVE_GAMES
@@ -105,7 +139,7 @@ def find_waiting_room(
             )
         ):
 
-            del ACTIVE_GAMES[game_id]
+            _cleanup_stale_lobby(game_id)
 
             continue
 
@@ -122,6 +156,27 @@ def find_waiting_room(
         ):
 
             continue
+
+        # ----------------------------------------------
+        # Skip rooms where THIS player is already in
+        # (fixes "already joined" bug)
+        # ----------------------------------------------
+
+        if player_token:
+
+            assignments = state.get(
+                "player_assignments",
+                {}
+            )
+
+            if player_token in assignments:
+
+                print(
+                    f"⏭️ SKIP room {game_id} — "
+                    f"player already in"
+                )
+
+                continue
 
         player_count = len(
             state.get(
@@ -179,8 +234,75 @@ def initialize_game(
 
         player_name = "Player"
 
+    # ----------------------------------------------
+    # REMOVE player from any stale LOBBY room
+    # they are already sitting in.
+    #
+    # This fixes the "already joined" bug when
+    # user taps Play, backs out, and taps Play
+    # again quickly.
+    #
+    # If the room is now empty, refund coins.
+    # ----------------------------------------------
+
+    from ..consumers import ACTIVE_GAMES
+
+    for existing_id, existing_state in list(
+        ACTIVE_GAMES.items()
+    ):
+
+        if existing_state.get(
+            "game_status"
+        ) != "LOBBY":
+
+            continue
+
+        assignments = existing_state.get(
+            "player_assignments",
+            {}
+        )
+
+        if player_token in assignments:
+
+            # ------------------------------------------
+            # Remove this player from the stale room
+            # ------------------------------------------
+
+            del assignments[player_token]
+
+            # Also remove from player_names
+            names = existing_state.get(
+                "player_names",
+                {}
+            )
+
+            if player_token in names:
+
+                del names[player_token]
+
+            print(
+                f"🧹 CLEANED stale LOBBY | "
+                f"Game={existing_id} | "
+                f"Player={player_token} | "
+                f"Remaining="
+                f"{len(assignments)}"
+            )
+
+            # ------------------------------------------
+            # If room is now empty, refund + delete
+            # ------------------------------------------
+
+            if not assignments:
+
+                _cleanup_stale_lobby(existing_id)
+
+    # ----------------------------------------------
+    # Now find a fresh waiting room
+    # ----------------------------------------------
+
     game_id = find_waiting_room(
-        is_two_player=is_two_player
+        is_two_player=is_two_player,
+        player_token=player_token,
     )
 
     if game_id is None:

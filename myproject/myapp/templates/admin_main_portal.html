@@ -2,110 +2,208 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <title>Admin Portal — Rocks Games</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ludo Game - Admin Main Portal</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
-        .portal-link { text-decoration: none !important; color: inherit !important; }
-        .portal-card { transition: transform 0.2s, box-shadow 0.2s; }
-        .portal-card:hover { transform: translateY(-5px); box-shadow: 0 8px 20px rgba(0,0,0,0.15) !important; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', 'Poppins', sans-serif;
+            background: #F5F7FA;
+            color: #1A202C;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ==============================
+           TOP BAR — DARK
+           ============================== */
+        .top-bar {
+            background: #1F2937;
+            color: white;
+            padding: 34px 30px;
+            text-align: center;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.2);
+        }
+        .top-bar h1 {
+            font-size: 1.8rem;
+            font-weight: 800;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        /* ==============================
+           MAIN AREA
+           ============================== */
+        .container-main {
+            flex: 1;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 50px 20px;
+            width: 100%;
+        }
+
+        /* ==============================
+           CARD GRID
+           ============================== */
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 24px;
+            justify-content: center;
+            align-items: stretch;
+        }
+        @media (max-width: 1100px) {
+            .cards-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 600px) {
+            .cards-grid { grid-template-columns: 1fr; }
+        }
+
+        /* ==============================
+           CARD
+           ============================== */
+        .card {
+            background: white;
+            border: 1.5px solid #E5E7EB;
+            border-radius: 12px;
+            padding: 32px 24px;
+            text-decoration: none;
+            color: inherit;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            transition: all 0.25s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            min-height: 340px;
+        }
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: #3B82F6;
+            box-shadow: 0 12px 30px rgba(59,130,246,0.15);
+        }
+        .card .icon {
+            font-size: 3rem;
+            margin-bottom: 20px;
+            display: block;
+            line-height: 1;
+        }
+        .card h3 {
+            color: #111827;
+            font-size: 1.35rem;
+            font-weight: 700;
+            margin-bottom: 14px;
+        }
+        .card p {
+            color: #4B5563;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            flex: 1;
+            margin-bottom: 20px;
+        }
+
+        /* ==============================
+           BADGE / BUTTON
+           ============================== */
+        .card-badge {
+            display: inline-block;
+            padding: 9px 22px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            color: white;
+            margin-top: auto;
+            transition: 0.2s;
+        }
+        .badge-green  { background: #16A34A; }
+        .badge-red    { background: #DC2626; }
+        .badge-blue   { background: #2563EB; }
+        .badge-yellow { background: #EAB308; color: #1F2937; }
+
+        /* ==============================
+           FOOTER
+           ============================== */
+        .footer {
+            text-align: center;
+            padding: 26px 20px;
+            color: #9CA3AF;
+            font-size: 0.85rem;
+            letter-spacing: 0.3px;
+        }
     </style>
 </head>
-<body class="bg-light" style="min-height: 100vh; display: flex; flex-direction: column;">
+<body>
 
-    <nav class="navbar navbar-dark bg-dark px-3 shadow-sm">
-        <span class="navbar-brand mb-0 h1 mx-auto fs-3 fw-bold">
-            🎲 LUDO MULTIPLAYER CONTROL CENTER
-        </span>
-    </nav>
+<!-- ============================================== -->
+<!-- TOP BAR -->
+<!-- ============================================== -->
+<div class="top-bar">
+    <h1>🎮 Rocks Games Control Center</h1>
+</div>
 
-    <div class="container my-auto py-5">
-        <div class="row justify-content-center g-4">
+<!-- ============================================== -->
+<!-- MAIN CARDS -->
+<!-- ============================================== -->
+<div class="container-main">
 
-            <!-- DEPOSIT BOARD -->
-            <div class="col-md-6 col-lg-3">
-                <a href="{% url 'custom_deposit_dashboard' %}" class="portal-link">
-                    <div class="card h-100 shadow-sm border-0 portal-card text-center">
-                        <div class="card-body p-4">
-                            <div class="display-3 mb-3">📥</div>
-                            <h3 class="card-title fw-bold text-dark mb-2">Deposit Board</h3>
-                            <p class="card-text text-muted">Review incoming payment alert claims and authorize persistent user wallet coin increments manually.</p>
-                            {% if pending_deposits_count > 0 %}
-                                <span class="badge bg-success fs-6 px-3 py-2">{{ pending_deposits_count }} Pending Alerts</span>
-                            {% else %}
-                                <span class="badge bg-light text-muted border fs-6 px-3 py-2">Clear - No Alerts</span>
-                            {% endif %}
-                        </div>
-                    </div>
-                </a>
-            </div>
+    <div class="cards-grid">
 
-            <!-- WITHDRAWAL BOARD -->
-            <div class="col-md-6 col-lg-3">
-                <a href="{% url 'custom_withdrawal_dashboard' %}" class="portal-link">
-                    <div class="card h-100 shadow-sm border-0 portal-card text-center">
-                        <div class="card-body p-4">
-                            <div class="display-3 mb-3">💸</div>
-                            <h3 class="card-title fw-bold text-dark mb-2">Withdrawal Board</h3>
-                            <p class="card-text text-muted">Authorize player outgoing payout execution sequences and deduct live transaction balance ledgers securely.</p>
-                            {% if pending_withdrawals_count > 0 %}
-                                <span class="badge bg-danger fs-6 px-3 py-2">{{ pending_withdrawals_count }} Actions Required</span>
-                            {% else %}
-                                <span class="badge bg-light text-muted border fs-6 px-3 py-2">Clear - No Payouts</span>
-                            {% endif %}
-                        </div>
-                    </div>
-                </a>
-            </div>
+        <!-- DEPOSITS -->
+        <a href="/management/dashboard/deposits/" class="card">
+            <span class="icon">💰</span>
+            <h3>Deposit Board</h3>
+            <p>
+                Review incoming payment alert claims and authorize
+                persistent user wallet coin increments manually.
+            </p>
+            <span class="card-badge badge-green">Deposit Panel</span>
+        </a>
 
-            <!-- PAYMENT SETTINGS -->
-            <div class="col-md-6 col-lg-3">
-                <a href="{% url 'custom_admin_settings' %}" class="portal-link">
-                    <div class="card h-100 shadow-sm border-0 portal-card text-center">
-                        <div class="card-body p-4">
-                            <div class="display-3 mb-3">⚙️</div>
-                            <h3 class="card-title fw-bold text-dark mb-2">Payment Settings</h3>
-                            <p class="card-text text-muted">Modify corporate title headings, validation phone numbers, and active visibility flags for payment gateways.</p>
-                            <span class="badge bg-secondary fs-6 px-3 py-2">{{ active_methods_count }} Active Providers Live</span>
-                        </div>
-                    </div>
-                </a>
-            </div>
+        <!-- WITHDRAWALS -->
+        <a href="/management/dashboard/withdrawals/" class="card">
+            <span class="icon">💸</span>
+            <h3>Withdrawal Board</h3>
+            <p>
+                Authorize player outgoing payout execution sequences
+                and deduct live transaction balance ledgers securely.
+            </p>
+            <span class="card-badge badge-red">Withdrawal Panel</span>
+        </a>
 
-            <!-- FINANCE MANAGEMENT DASHBOARD -->
-            <div class="col-md-6 col-lg-3">
-                <a href="{% url 'finance_management_dashboard' %}" class="portal-link">
-                    <div class="card h-100 shadow-sm border-0 portal-card text-center">
-                        <div class="card-body p-4">
-                            <div class="display-3 mb-3">📊</div>
-                            <h3 class="card-title fw-bold text-dark mb-2">Finance Dashboard</h3>
-                            <p class="card-text text-muted">Manage platform economic rules, commissions, taxes, winner payouts, revenue and system financial metrics.</p>
-                            <span class="badge bg-primary fs-6 px-3 py-2">Financial Controls</span>
-                        </div>
-                    </div>
-                </a>
-            </div>
+        <!-- LEADERBOARD REWARDS -->
+        <a href="/management/dashboard/rewards/" class="card">
+            <span class="icon">🏆</span>
+            <h3>Leaderboard Rewards</h3>
+            <p>
+                Distribute weekly and monthly rewards to top ranked
+                players and track full distribution history.
+            </p>
+            <span class="card-badge badge-blue">Rewards Panel</span>
+        </a>
 
-            <!-- GIFT CONTROL -->
-            <div class="col-md-6 col-lg-3">
-                <a href="{% url 'gift_control_dashboard' %}" class="portal-link">
-                    <div class="card h-100 shadow-sm border-0 portal-card text-center">
-                        <div class="card-body p-4">
-                            <div class="display-3 mb-3">🎁</div>
-                            <h3 class="card-title fw-bold text-dark mb-2">Gift Control</h3>
-                            <p class="card-text text-muted">Enable or disable daily gift spin and set paid spin cost for players.</p>
-                            <span class="badge bg-warning text-dark fs-6 px-3 py-2">Gift Settings</span>
-                        </div>
-                    </div>
-                </a>
-            </div>
+        <!-- GIFT CONTROL -->
+        <a href="/management/dashboard/gift/" class="card">
+            <span class="icon">🎁</span>
+            <h3>Gift Control</h3>
+            <p>
+                Enable or disable daily gift spin and set paid spin
+                cost for players across the platform.
+            </p>
+            <span class="card-badge badge-yellow">Gift Settings</span>
+        </a>
 
-        </div>
     </div>
 
-    <footer class="text-center py-3 text-muted bg-white border-top mt-auto">
-        <small>Secure Backend Management Portal Core Engine</small>
-    </footer>
+</div>
+
+<!-- ============================================== -->
+<!-- FOOTER -->
+<!-- ============================================== -->
+<div class="footer">
+    Secure Backend Management Portal Core Engine
+</div>
 
 </body>
 </html>
