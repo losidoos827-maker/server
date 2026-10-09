@@ -3,6 +3,7 @@ from django.urls import path
 from django.shortcuts import redirect
 from django.contrib import messages
 from django.db import transaction
+from django.utils.html import format_html
 
 from .models import (
     SystemPaymentMethod,
@@ -49,7 +50,6 @@ class DepositRequestAdmin(admin.ModelAdmin):
     def approve_deposits(self, request, queryset):
 
         count = 0
-
         total_referrer_rewards = 0
 
         for deposit in queryset.filter(status='PENDING'):
@@ -71,7 +71,6 @@ class DepositRequestAdmin(admin.ModelAdmin):
                 profile.coins += deposit.amount
 
                 if is_first:
-
                     profile.has_made_first_deposit = True
 
                 profile.save(
@@ -135,11 +134,9 @@ class DepositRequestAdmin(admin.ModelAdmin):
         )
 
         if not referral:
-
             return 0
 
         if not referral.referrer:
-
             return 0
 
         reward = int(
@@ -147,7 +144,6 @@ class DepositRequestAdmin(admin.ModelAdmin):
         )
 
         if reward <= 0:
-
             return 0
 
         referrer = (
@@ -158,18 +154,15 @@ class DepositRequestAdmin(admin.ModelAdmin):
         )
 
         if not referrer:
-
             return 0
 
         referrer.coins += reward
-
         referrer.save(update_fields=["coins"])
 
         referral.referrer_reward_paid = True
 
         referral.total_commission_earned = (
-            referral.total_commission_earned
-            + reward
+            referral.total_commission_earned + reward
         )
 
         referral.save(
@@ -199,7 +192,10 @@ class DepositRequestAdmin(admin.ModelAdmin):
 
     def reject_deposits(self, request, queryset):
 
-        updated = queryset.filter(status='PENDING').update(status='REJECTED')
+        updated = (
+            queryset.filter(status='PENDING')
+            .update(status='REJECTED')
+        )
 
         self.message_user(
             request,
@@ -232,7 +228,7 @@ class SystemPaymentMethodAdmin(admin.ModelAdmin):
 
 
 # ==============================================================================
-# USER PROFILE BALANCE
+# USER PROFILE BALANCE  ← IP + GPS
 # ==============================================================================
 
 @admin.register(UserProfileBalance)
@@ -240,12 +236,53 @@ class UserProfileBalanceAdmin(admin.ModelAdmin):
 
     list_display = (
         'device_token',
-        'coins'
+        'nickname',
+        'ip_address',
+        'location_link',
+        'coins',
+        'locked_coins',
+        'created_at',
     )
 
     search_fields = (
         'device_token',
+        'nickname',
+        'email',
+        'ip_address',
     )
+
+    list_filter = (
+        'created_at',
+    )
+
+    readonly_fields = (
+        'ip_address',
+        'location_link',
+        'location_updated_at',
+        'created_at',
+        'updated_at',
+    )
+
+    ordering = (
+        '-created_at',
+    )
+
+    def location_link(self, obj):
+
+        if obj.latitude is None or obj.longitude is None:
+            return "—"
+
+        url = (
+            f"https://www.google.com/maps"
+            f"?q={obj.latitude},{obj.longitude}"
+        )
+
+        return format_html(
+            '<a href="{}" target="_blank">📍 Map</a>',
+            url
+        )
+
+    location_link.short_description = "Location"
 
 
 # ==============================================================================
@@ -315,10 +352,7 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
 
                 return redirect(f'../../')
 
-            # Coins are ALREADY deducted at request time.
-            # Do NOT deduct again. Just mark APPROVED.
             obj.status = 'APPROVED'
-
             obj.save(update_fields=['status'])
 
             self.message_user(
@@ -349,8 +383,6 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
 
                 return redirect(f'../../')
 
-            # Coins were deducted at request time.
-            # Refund them back on rejection.
             profile = (
                 UserProfileBalance.objects
                 .select_for_update()
@@ -363,7 +395,6 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
             if profile:
 
                 profile.coins += obj.amount
-
                 profile.save(update_fields=['coins'])
 
                 SystemTransactionLog.objects.create(
@@ -374,7 +405,6 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
                 )
 
             obj.status = 'REJECTED'
-
             obj.save(update_fields=['status'])
 
             self.message_user(
@@ -390,7 +420,7 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
 
 
 # ==============================================================================
-# SYSTEM SETTINGS  (App config — support contacts, terms, etc.)
+# SYSTEM SETTINGS
 # ==============================================================================
 
 @admin.register(SystemSetting)
@@ -418,5 +448,5 @@ class SystemSettingAdmin(admin.ModelAdmin):
     help_text = (
         "Common keys: support_whatsapp, support_telegram, "
         "support_email, terms_text, privacy_text, app_version, "
-        "gift_enabled, paid_spin_cost"
+        "gift_enabled, paid_spin_cost, referral_share_text"
     )
