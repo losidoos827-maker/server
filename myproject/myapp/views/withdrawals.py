@@ -3,6 +3,7 @@ import json
 from django.contrib import messages
 from django.contrib.auth.hashers import check_password
 from django.http import JsonResponse
+from django.utils import timezone
 
 from django.shortcuts import (
     get_object_or_404,
@@ -20,6 +21,8 @@ from django.contrib.admin.views.decorators import (
 
 from django.db import transaction
 
+from datetime import timedelta
+
 from ..models import (
     WithdrawalRequest,
     UserProfileBalance,
@@ -31,13 +34,115 @@ from ..services.wager_service import (
 )
 
 
-# ==========================================
+# ==========================================================
+# CONSTANTS
+# ==========================================================
+
+# After this many approved withdrawals, user must provide
+# FRESH location on every subsequent withdrawal.
+LOCATION_REQUIRED_AFTER = 8
+
+# Location must have been updated within this many minutes
+# to be considered "fresh" for a withdrawal.
+LOCATION_FRESHNESS_MINUTES = 5
+
+
+# ==========================================================
+# HELPER — CHECK LOCATION REQUIREMENT
+# ==========================================================
+
+def _check_location_requirement(profile):
+
+    # Count approved withdrawals
+    approved_count = (
+        WithdrawalRequest.objects
+        .filter(
+            device_token=profile.device_token,
+            status="APPROVED",
+        )
+        .count()
+    )
+
+    # Location becomes mandatory after 3 approvals
+    requires_location = (
+        approved_count >= LOCATION_REQUIRED_AFTER
+    )
+
+    # Check if we have a RECENT location on file
+    has_fresh_location = False
+
+    if (
+        profile.latitude is not None
+        and profile.longitude is not None
+        and profile.location_updated_at is not None
+    ):
+
+        age = (
+            timezone.now()
+            - profile.location_updated_at
+        )
+
+        has_fresh_location = (
+            age < timedelta(
+                minutes=LOCATION_FRESHNESS_MINUTES
+            )
+        )
+
+    return (
+        approved_count,
+        requires_location,
+        has_fresh_location,
+    )
+
+
+# ==========================================================
+# WITHDRAWAL STATUS  (Android checks before withdraw)
+# ==========================================================
+
+@csrf_exempt
+def get_withdrawal_status(request, device_token):
+
+    if not device_token:
+
+        return JsonResponse(
+            {"status": "error", "message": "device_token required"},
+            status=400,
+        )
+
+    profile = (
+        UserProfileBalance.objects
+        .filter(device_token=device_token)
+        .first()
+    )
+
+    if not profile:
+
+        return JsonResponse(
+            {"status": "error", "message": "Profile not found."},
+            status=404,
+        )
+
+    (
+        approved_count,
+        requires_location,
+        has_fresh_location,
+    ) = _check_location_requirement(profile)
+
+    return JsonResponse({
+        "status": "success",
+        "approved_withdrawal_count": approved_count,
+        "requires_location": requires_location,
+        "has_location": has_fresh_location,
+        "location_freshness_minutes": LOCATION_FRESHNESS_MINUTES,
+        "location_required_and_missing": (
+            requires_location and not has_fresh_location
+        ),
+    })
+
+
+# ==========================================================
 # MOBILE WITHDRAWAL
-#
-# Coins are DEDUCTED immediately at request time.
-# If approved → coins stay deducted.
-# If rejected → coins are REFUNDED back.
-# ==========================================
+# ==========================================================
 
 @csrf_exempt
 def submit_withdrawal_request(request):
@@ -53,27 +158,12 @@ def submit_withdrawal_request(request):
 
         data = json.loads(request.body)
 
-        device_token = data.get(
-            "device_token"
-        )
-
-        amount = int(
-            data.get("amount", 0)
-        )
-
+        device_token = data.get("device_token")
+        amount = int(data.get("amount", 0))
         method = data.get("method")
-
-        account_title = data.get(
-            "account_title"
-        )
-
-        account_number = data.get(
-            "account_number"
-        )
-
-        pin = str(
-            data.get("pin", "")
-        ).strip()
+        account_title = data.get("account_title")
+        account_number = data.get("account_number")
+        pin = str(data.get("pin", "")).strip()
 
         if not all([
             device_token,
@@ -84,22 +174,14 @@ def submit_withdrawal_request(request):
         ]):
 
             return JsonResponse(
-                {
-                    "error": (
-                        "Invalid fields "
-                        "verification failure"
-                    )
-                },
+                {"error": "Invalid fields verification failure"},
                 status=400,
             )
 
         if not pin:
 
             return JsonResponse(
-                {
-                    "error":
-                        "Withdrawal PIN is required.",
-                },
+                {"error": "Withdrawal PIN is required."},
                 status=400,
             )
 
@@ -115,16 +197,37 @@ def submit_withdrawal_request(request):
             if not profile:
 
                 return JsonResponse(
-                    {
-                        "error":
-                            "User wallet profile not found.",
-                    },
+                    {"error": "User wallet profile not found."},
                     status=404,
                 )
 
-            # ----------------------------------------------
-            # PIN must be set
-            # ----------------------------------------------
+            # ==================================================
+            # LOCATION CHECK — fresh location required
+            # ==================================================
+
+            (
+                approved_count,
+                requires_location,
+                has_fresh_location,
+            ) = _check_location_requirement(profile)
+
+            if requires_location and not has_fresh_location:
+
+                return JsonResponse(
+                    {
+                        "error": (
+                            "Fresh location required. "
+                            "Please grant location permission "
+                            "again to continue withdrawing."
+                        ),
+                        "code": "LOCATION_REQUIRED",
+                    },
+                    status=400,
+                )
+
+            # ==================================================
+            # PIN CHECK
+            # ==================================================
 
             if not profile.has_withdrawal_pin:
 
@@ -139,10 +242,6 @@ def submit_withdrawal_request(request):
                     status=400,
                 )
 
-            # ----------------------------------------------
-            # Verify PIN
-            # ----------------------------------------------
-
             if not check_password(
                 pin,
                 profile.withdrawal_pin_hash,
@@ -156,9 +255,9 @@ def submit_withdrawal_request(request):
                     status=400,
                 )
 
-            # ----------------------------------------------
-            # Balance check
-            # ----------------------------------------------
+            # ==================================================
+            # BALANCE CHECK
+            # ==================================================
 
             if profile.coins < amount:
 
@@ -172,16 +271,12 @@ def submit_withdrawal_request(request):
                     status=400,
                 )
 
-            # ==============================================
-            # DEDUCT COINS IMMEDIATELY
-            # ==============================================
+            # ==================================================
+            # DEDUCT + CREATE REQUEST
+            # ==================================================
 
             profile.coins -= amount
             profile.save(update_fields=["coins"])
-
-            # ==============================================
-            # Ledger entry
-            # ==============================================
 
             withdrawal = WithdrawalRequest.objects.create(
                 device_token=device_token,
@@ -199,11 +294,34 @@ def submit_withdrawal_request(request):
                 reference_id=f"REQ_{withdrawal.id}",
             )
 
+            # ==================================================
+            # CONSUME LOCATION — force fresh next time
+            #
+            # After a successful withdrawal submission,
+            # we clear the location so the user must
+            # provide it fresh for the next one.
+            # ==================================================
+
+            if requires_location:
+
+                profile.location_updated_at = None
+
+                profile.save(
+                    update_fields=["location_updated_at"]
+                )
+
+                print(
+                    f"📍 LOCATION CONSUMED | "
+                    f"device={device_token} — "
+                    f"fresh location required next time"
+                )
+
             print(
                 f"💸 WITHDRAWAL REQUEST | "
                 f"device={device_token} | "
                 f"amount={amount} | "
-                f"new_balance={profile.coins}"
+                f"new_balance={profile.coins} | "
+                f"approved_count={approved_count}"
             )
 
         return JsonResponse({
@@ -234,9 +352,9 @@ def submit_withdrawal_request(request):
         )
 
 
-# ==========================================
+# ==========================================================
 # ADMIN WITHDRAWAL DASHBOARD
-# ==========================================
+# ==========================================================
 
 @staff_member_required
 def custom_withdrawal_dashboard(request):
@@ -254,35 +372,24 @@ def custom_withdrawal_dashboard(request):
         profile, _ = (
             UserProfileBalance.objects
             .get_or_create(
-                device_token=(
-                    withdrawal.device_token
-                )
+                device_token=withdrawal.device_token
             )
         )
 
         withdrawal_items.append({
-            "request":
-                withdrawal,
-
-            "current_balance":
-                profile.coins,
-
-            # Coins already deducted at request time
-            # so this is just informational
-            "has_enough":
-                True,
+            "request": withdrawal,
+            "current_balance": profile.coins,
+            "has_enough": True,
         })
 
     context = {
-        "withdrawal_items":
-            withdrawal_items
+        "withdrawal_items": withdrawal_items
     }
 
     if (
         request.method == "GET"
-        and request.headers.get(
-            "x-requested-with"
-        ) == "XMLHttpRequest"
+        and request.headers.get("x-requested-with")
+        == "XMLHttpRequest"
     ):
 
         return render(
@@ -298,18 +405,12 @@ def custom_withdrawal_dashboard(request):
     )
 
 
-# ==========================================
+# ==========================================================
 # APPROVE WITHDRAWAL
-#
-# Coins were already deducted at request time.
-# Just change status to APPROVED.
-# ==========================================
+# ==========================================================
 
 @staff_member_required
-def approve_withdrawal_custom(
-    request,
-    withdraw_id,
-):
+def approve_withdrawal_custom(request, withdraw_id):
 
     withdrawal = get_object_or_404(
         WithdrawalRequest,
@@ -317,14 +418,11 @@ def approve_withdrawal_custom(
         status="PENDING",
     )
 
-    result = process_withdrawal_approval(
-        withdrawal.id
-    )
+    result = process_withdrawal_approval(withdrawal.id)
 
     if (
-        request.headers.get(
-            "x-requested-with"
-        ) == "XMLHttpRequest"
+        request.headers.get("x-requested-with")
+        == "XMLHttpRequest"
     ):
 
         return JsonResponse(
@@ -338,34 +436,21 @@ def approve_withdrawal_custom(
 
     if result["status"] == "success":
 
-        messages.success(
-            request,
-            result["message"],
-        )
+        messages.success(request, result["message"])
 
     else:
 
-        messages.error(
-            request,
-            result["message"],
-        )
+        messages.error(request, result["message"])
 
-    return redirect(
-        "custom_withdrawal_dashboard"
-    )
+    return redirect("custom_withdrawal_dashboard")
 
 
-# ==========================================
+# ==========================================================
 # REJECT WITHDRAWAL
-#
-# Coins are REFUNDED back to the user's wallet.
-# ==========================================
+# ==========================================================
 
 @staff_member_required
-def reject_withdrawal_custom(
-    request,
-    withdraw_id,
-):
+def reject_withdrawal_custom(request, withdraw_id):
 
     with transaction.atomic():
 
@@ -375,16 +460,10 @@ def reject_withdrawal_custom(
             status="PENDING",
         )
 
-        # ----------------------------------------------
-        # Refund coins to user
-        # ----------------------------------------------
-
         profile = (
             UserProfileBalance.objects
             .select_for_update()
-            .filter(
-                device_token=withdrawal.device_token
-            )
+            .filter(device_token=withdrawal.device_token)
             .first()
         )
 
@@ -392,10 +471,6 @@ def reject_withdrawal_custom(
 
             profile.coins += withdrawal.amount
             profile.save(update_fields=["coins"])
-
-            # ------------------------------------------
-            # Refund ledger
-            # ------------------------------------------
 
             SystemTransactionLog.objects.create(
                 user_profile=profile,
@@ -415,16 +490,14 @@ def reject_withdrawal_custom(
         withdrawal.save(update_fields=["status"])
 
     if (
-        request.headers.get(
-            "x-requested-with"
-        ) == "XMLHttpRequest"
+        request.headers.get("x-requested-with")
+        == "XMLHttpRequest"
     ):
 
         return JsonResponse({
             "status": "success",
             "message": (
-                "Withdrawal rejected. "
-                "Coins refunded to user."
+                "Withdrawal rejected. Coins refunded to user."
             ),
             "refunded_amount": withdrawal.amount,
         })
@@ -438,6 +511,4 @@ def reject_withdrawal_custom(
         ),
     )
 
-    return redirect(
-        "custom_withdrawal_dashboard"
-    )
+    return redirect("custom_withdrawal_dashboard")

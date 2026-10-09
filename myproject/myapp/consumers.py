@@ -1421,6 +1421,79 @@ class LudoGameConsumer(
         await self.broadcast_current_state()
 
     # ======================================================
+    # HANDLE SKIP TURN (AFK timeout)  ← NEW
+    #
+    # Called by the frontend when the player's turn times
+    # out (40s of inactivity).
+    #
+    # Server advances turn to next player immediately.
+    # Also as a backup, the server-side auto timer
+    # (TURN_TIMEOUT_SECONDS) will fire on its own.
+    # ======================================================
+
+    async def handle_skip_turn(
+        self,
+        state
+    ):
+
+        # Only in ACTIVE games
+        if state.get("game_status") != "ACTIVE":
+
+            return
+
+        # Only the current player may request a skip
+        if not self.is_current_players_turn(state):
+
+            print(
+                f"⚠️ REJECTED SKIP | "
+                f"Game={self.game_id} | "
+                f"Player={self.player_token} "
+                f"(not their turn)"
+            )
+
+            return
+
+        order = state.get("player_turn_order", [])
+
+        if not order:
+
+            return
+
+        current_color = order[state["turn_index"]]
+
+        # Reset dice state
+        state["has_rolled"] = False
+
+        # Advance to next player
+        state["turn_index"] = (
+            state["turn_index"] + 1
+        ) % len(order)
+
+        next_color = order[state["turn_index"]]
+
+        state["status_text"] = (
+            f"⏰ {current_color} timed out! "
+            f"{next_color}'s Turn"
+        )
+
+        print(
+            f"⏰ SKIP TURN | "
+            f"Game={self.game_id} | "
+            f"From={current_color} | "
+            f"To={next_color}"
+        )
+
+        # Cancel the stale server-side timer (it was for
+        # the old turn and is now obsolete)
+        _cancel_turn_timer(self.game_id)
+
+        # Force a fresh timer for the new turn
+        LAST_SCHEDULED_TURN.pop(self.game_id, None)
+
+        # Broadcast (which schedules a new timer)
+        await self.broadcast_current_state()
+
+    # ======================================================
     # RECEIVE
     # ======================================================
 
@@ -1517,6 +1590,19 @@ class LudoGameConsumer(
                 data.get("token_id"),
                 data.get("color")
             )
+
+        # ==================================================
+        # SKIP TURN  ← NEW
+        #
+        # Frontend sends this when the player's 40s
+        # turn timer expires. Server advances turn.
+        # ==================================================
+
+        elif action == "skip_turn":
+
+            await self.handle_skip_turn(state)
+
+            return
 
         await self.broadcast_current_state()
 

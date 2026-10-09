@@ -111,6 +111,30 @@ class UserProfileBalance(models.Model):
         upload_to='profile_pics/', blank=True, null=True
     )
 
+    # ---- IP Address Tracking ----
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        help_text="Last seen IP address of this user."
+    )
+
+    # ---- GPS Location Tracking ----
+    latitude = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Last known GPS latitude."
+    )
+    longitude = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Last known GPS longitude."
+    )
+    location_updated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when location was last updated."
+    )
+
     device_token = models.CharField(max_length=255, unique=True, db_index=True)
     coins = models.IntegerField(default=0, help_text="Available active balance pool.")
     locked_coins = models.IntegerField(

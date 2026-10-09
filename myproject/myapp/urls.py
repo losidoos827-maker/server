@@ -42,6 +42,7 @@ from .views.wallet import (
     get_active_payment_details,
     get_user_balance,
     get_transaction_history,
+    update_user_location,
 )
 
 from .views.game_history import (
@@ -74,6 +75,7 @@ from .views.withdrawals import (
     custom_withdrawal_dashboard,
     approve_withdrawal_custom,
     reject_withdrawal_custom,
+    get_withdrawal_status,
 )
 
 from .views.admin_gift import (
@@ -129,7 +131,13 @@ urlpatterns = [
     path("api/deposit/balance/<str:device_token>/", get_user_balance, name="user_balance"),
     path("api/deposit/submit/", submit_deposit_request, name="submit_deposit"),
     path("api/deposit/history/<str:device_token>/", get_transaction_history, name="get_transaction_history"),
+
+    # WITHDRAW
     path("api/withdraw/submit/", submit_withdrawal_request, name="submit_withdrawal"),
+    path("api/withdraw/status/<str:device_token>/", get_withdrawal_status, name="get_withdrawal_status"),
+
+    # LOCATION
+    path("api/user/location/", update_user_location, name="update_user_location"),
 
     # GAME HISTORY
     path("api/user/game-history/<str:device_token>/", get_game_history, name="get_game_history"),
@@ -180,9 +188,7 @@ urlpatterns = [
     path("management/settings/", custom_admin_settings, name="custom_admin_settings"),
     path("dashboard/finance/", finance_management_dashboard, name="finance_management_dashboard"),
 
-    # --------------------------
-    # REWARDS PANEL (NEW)
-    # --------------------------
+    # REWARDS PANEL
 
     path(
         "management/dashboard/rewards/",
@@ -200,9 +206,7 @@ urlpatterns = [
         name="distribute_monthly_rewards",
     ),
 
-    # --------------------------
-    # ANALYTICS PANEL (NEW)
-    # --------------------------
+    # ANALYTICS PANEL
 
     path(
         "management/dashboard/analytics/",
